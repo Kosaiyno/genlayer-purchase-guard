@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "project": "PurchaseGuard",
+  "track": "Builder -> Intelligent Contracts",
+  "description": "Autonomous On-Chain Procurement Firewall & Policy Arbiter with contract-side independent vendor evidence acquisition",
+  "network": {
+    "name": "StudioNet",
+    "chain_id": 61999,
+    "rpc": "https://studio.genlayer.com/api",
+    "explorer": "https://explorer-studio.genlayer.com"
+  },
+  "runner": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6",
+  "contract": {
+    "name": "PurchaseGuard",
+    "file": "contracts/purchase_guard.py",
+    "address": "0x2A835e048362A8A38bD4F4Ef0d4b83F96D2c410a",
+    "explorer_url": "https://explorer-studio.genlayer.com/address/0x2A835e048362A8A38bD4F4Ef0d4b83F96D2c410a",
+    "deploy_tx": "0xcf3f4b3dcf0d9e4f1fb394a4d9c1de53f91a1a2c34ae7fd18e3f8482e73f103c"
+  },
+  "evidence_sources": {
+    "repository": "https://github.com/kosaiyno/genlayer-purchase-guard",
+    "honest_crucial_ssd": "https://raw.githubusercontent.com/kosaiyno/genlayer-purchase-guard/main/evidence/honest_crucial_ssd.json",
+    "downgraded_sata_ssd": "https://raw.githubusercontent.com/kosaiyno/genlayer-purchase-guard/main/evidence/downgraded_sata_ssd.json",
+    "price_surged_ssd": "https://raw.githubusercontent.com/kosaiyno/genlayer-purchase-guard/main/evidence/price_surged_ssd.json"
+  },
+  "transactions": [
+    {
+      "step": 1,
+      "method": "deploy",
+      "description": "Deploy PurchaseGuard on StudioNet",
+      "tx_hash": "0xcf3f4b3dcf0d9e4f1fb394a4d9c1de53f91a1a2c34ae7fd18e3f8482e73f103c",
+      "status": "FINALIZED",
+      "consensus_state": "FINALIZED",
+      "execution_result": "SUCCESS",
+      "explorer_url": "https://explorer-studio.genlayer.com/tx/0xcf3f4b3dcf0d9e4f1fb394a4d9c1de53f91a1a2c34ae7fd18e3f8482e73f103c"
+    },
+    {
+      "step": 2,
+      "method": "create_mandate",
+      "description": "Create Mandate 1: 1TB NVMe read >= 7000MB/s, budget $100.00, NEW_ONLY",
+      "tx_hash": "0xfcdc48c5d70a0433c68383e85bedcc4d3fc340305f17cb329a8173dd0d288c3b",
+      "status": "FINALIZED",
+      "consensus_state": "FINALIZED",
+      "execution_result": "SUCCESS",
+      "explorer_url": "https://explorer-studio.genlayer.com/tx/0xfcdc48c5d70a0433c68383e85bedcc4d3fc340305f17cb329a8173dd0d288c3b"
+    },
+    {
+      "step": 3,
+      "method": "propose_substitution",
+      "description": "Propose Crucial P5 Plus ($89.99) with vendor URL for Mandate 1",
+      "tx_hash": "0xd4d9041af2a8895b3418c9b552d17deed96e75eeb445bc7254721296dbd0b122",
+      "status": "FINALIZED",
+      "consensus_state": "FINALIZED",
+      "execution_result": "SUCCESS",
+      "explorer_url": "https://explorer-studio.genlayer.com/tx/0xd4d9041af2a8895b3418c9b552d17deed96e75eeb445bc7254721296dbd0b122"
+    },
+    {
+      "step": 4,
+      "method": "adjudicate_substitution",
+      "description": "Adjudicate Mandate 1: Independent fetch reads 6600MB/s read speed, rejects due to spec floor shortfall (required >= 7000MB/s), extracts verbatim quote",
+      "tx_hash": "0x2fdcfd4269a469fd62e59abb905b0b97ef33291789256174f8a9da6eb635799a",
+      "status": "FINALIZED",
+      "consensus_state": "FINALIZED",
+      "execution_result": "SUCCESS",
+      "verdict": "REJECTED",
+      "verbatim_quote": "\"sequential_read_speed\": \"6600 MB/s\"",
+      "explorer_url": "https://explorer-studio.genlayer.com/tx/0x2fdcfd4269a469fd62e59abb905b0b97ef33291789256174f8a9da6eb635799a"
+    },
+    {
+      "step": 5,
+      "method": "create_mandate",
+      "description": "Create Mandate 2: 1TB NVMe, budget $100.00, NEW_ONLY",
+      "tx_hash": "0xa5568b6da9656c2041576f1a540262c64bd4ae05cc534475e3c3275cabc9a3bc",
+      "status": "FINALIZED",
+      "consensus_state": "FINALIZED",
+      "execution_result": "SUCCESS",
+      "explorer_url": "https://explorer-studio.genlayer.com/tx/0xa5568b6da9656c2041576f1a540262c64bd4ae05cc534475e3c3275cabc9a3bc"
+    },
+    {
+      "step": 6,
+      "method": "propose_substitution",
+      "description": "Adversarial proposal: Agent claims cheap NVMe drive, but vendor page is a refurbished SATA drive",
+      "tx_hash": "0xfcb26f1652dd5595f1a78ae2079518ea8a6685b5feee2b55ac55510f0e0599e4",
+      "status": "FINALIZED",
+      "consensus_state": "FINALIZED",
+      "execution_result": "SUCCESS",
+      "explorer_url": "https://explorer-studio.genlayer.com/tx/0xfcb26f1652dd5595f1a78ae2079518ea8a6685b5feee2b55ac55510f0e0599e4"
+    },
+    {
+      "step": 7,
+      "method": "adjudicate_substitution",
+      "description": "ADVERSARIAL ABUSE INTERCEPTED: Contract fetches vendor page, catches REFURBISHED condition and SATA downgrade, deterministic clamp enforces REJECTED",
+      "tx_hash": "0xb44029811bf94cf428ee7866488097d63c9d1884897bf03c649dafe5e4bf0cd9",
+      "status": "FINALIZED",
+      "consensus_state": "FINALIZED",
+      "execution_result": "SUCCESS",
+      "verdict": "REJECTED",
+      "expected_failure_label": "ADVERSARIAL_REFURBISHED_ABUSE_BLOCKED",
+      "verbatim_quote": "\"condition\": \"REFURBISHED\", \"stock_status\": \"IN_STOCK\", \"price_cents\": 4500",
+      "explorer_url": "https://explorer-studio.genlayer.com/tx/0xb44029811bf94cf428ee7866488097d63c9d1884897bf03c649dafe5e4bf0cd9"
+    },
+    {
+      "step": 8,
+      "method": "create_mandate",
+      "description": "Create Mandate 3: 1TB NVMe read >= 6500MB/s, budget $100.00, ANY brand, NEW_ONLY",
+      "tx_hash": "0xa20d92cf8627e33012e567bb1bfac04ae0c55d67f161f6d5096b3532fc137221",
+      "status": "FINALIZED",
+      "consensus_state": "FINALIZED",
+      "execution_result": "SUCCESS",
+      "explorer_url": "https://explorer-studio.genlayer.com/tx/0xa20d92cf8627e33012e567bb1bfac04ae0c55d67f161f6d5096b3532fc137221"
+    },
+    {
+      "step": 9,
+      "method": "propose_substitution",
+      "description": "Propose Crucial P5 Plus ($89.99) for Mandate 3",
+      "tx_hash": "0x110652f02d33cfcb064206902085b83ad526915054e14c59b9b0b8900783276d",
+      "status": "FINALIZED",
+      "consensus_state": "FINALIZED",
+      "execution_result": "SUCCESS",
+      "explorer_url": "https://explorer-studio.genlayer.com/tx/0x110652f02d33cfcb064206902085b83ad526915054e14c59b9b0b8900783276d"
+    },
+    {
+      "step": 10,
+      "method": "adjudicate_substitution",
+      "description": "LIVE APPROVED DEMONSTRATION: Contract fetches vendor page, verifies specs (6600MB/s >= 6500MB/s floor, NEW condition, in stock, $89.99 <= $100 budget), extracts verbatim quote, finalizes as APPROVED",
+      "tx_hash": "0x80cee7727db2bdeb7153fbbca75ee93688d61960d5fca8c4b9318ae101d18805",
+      "status": "FINALIZED",
+      "consensus_state": "FINALIZED",
+      "execution_result": "SUCCESS",
+      "verdict": "APPROVED",
+      "verbatim_quote": "\"product_title\": \"Crucial P5 Plus 1TB PCIe 4.0 3D NAND NVMe M.2 Gaming SSD\"",
+      "explorer_url": "https://explorer-studio.genlayer.com/tx/0x80cee7727db2bdeb7153fbbca75ee93688d61960d5fca8c4b9318ae101d18805"
+    },
+    {
+      "step": 11,
+      "method": "confirm_purchase",
+      "description": "Confirm purchase on approved Mandate 3, transitioning state to EXECUTED",
+      "tx_hash": "0x1f5a84f3fa1529153b749d14e3c02f589ee5d12afecb53d156a440de158b6422",
+      "status": "ACCEPTED",
+      "consensus_state": "ACCEPTED",
+      "execution_result": "SUCCESS",
+      "resulting_status": "EXECUTED",
+      "explorer_url": "https://explorer-studio.genlayer.com/tx/0x1f5a84f3fa1529153b749d14e3c02f589ee5d12afecb53d156a440de158b6422"
+    }
+  ]
+}

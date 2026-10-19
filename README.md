@@ -1,176 +1,86 @@
-# PurchaseGuard — Agentic Purchase Substitution Guard
+# PurchaseGuard — Autonomous On-Chain Procurement Firewall
 
-[![GenLayer Intelligent Contract](https://img.shields.io/badge/GenLayer-Intelligent%20Contract-blue.svg)](https://genlayer.com)
-[![Consensus](https://img.shields.io/badge/Consensus-Equivalence%20Principle-green.svg)](https://docs.genlayer.com)
-[![Tests](https://img.shields.io/badge/Tests-12%20Passed-brightgreen.svg)](tests/test_purchase_guard.py)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+> **GenLayer Builder Track**: Intelligent Contracts  
+> **Network**: GenLayer StudioNet (Chain ID: `61999`)  
+> **Runtime**: `py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6`  
+> **Deployed Contract (StudioNet)**: [`0x2A835e048362A8A38bD4F4Ef0d4b83F96D2c410a`](https://explorer-studio.genlayer.com/address/0x2A835e048362A8A38bD4F4Ef0d4b83F96D2c410a)
 
-An autonomous on-chain procurement firewall and policy escrow primitive built on GenLayer. `PurchaseGuard` enables AI shopping and procurement agents to handle out-of-stock events, price surges, and model discontinuations by adjudicating product substitutions through subjective multi-validator consensus under the GenLayer Equivalence Principle.
+An autonomous on-chain procurement firewall and policy escrow primitive built on GenLayer. `PurchaseGuard` protects corporate procurement and autonomous shopping agents from hallucinations, hidden price surges, counterfeit goods, and deceptive product substitutions.
 
----
-
-## The Problem in the Agentic Economy
-
-Autonomous AI agents are increasingly entrusted with discretionary purchasing power—booking travel, purchasing inventory, acquiring compute instances, and ordering hardware. However, real-world commerce is non-deterministic:
-
-1. **Inventory Volatility**: Target items frequently go out-of-stock or face unexpected price fluctuations.
-2. **The EVM Limitation**: Traditional smart contracts (EVM/SVM) operate purely on rigid numeric equality or cryptographic hashes. They cannot judge whether a *Crucial P5 Plus 1TB NVMe SSD* is functionally and economically equivalent to an out-of-stock *Samsung 980 Pro 1TB NVMe SSD*.
-3. **The Agent Dilemma**: Current agents either:
-   - **Halt and stall** waiting for human approval, breaking automation workflows; or
-   - **Hallucinate bad substitutes**, purchasing incompatible, downgraded, or over-budget products with zero on-chain accountability.
+Unlike contracts that trust caller-supplied arguments, `PurchaseGuard` **independently acquires and validates material vendor facts on-chain** using `gl.nondet.web.get()`, extracts mandatory verbatim quote evidence under the Equivalence Principle (`gl.eq_principle.prompt_non_comparative`), and enforces deterministic safety clamps.
 
 ---
 
-## The Solution: PurchaseGuard
-
-`PurchaseGuard` introduces an autonomous on-chain arbiter that bridges buyer constraints with agent autonomy:
+## 1. Architecture & Verification Flow
 
 ```mermaid
-flowchart TD
-    Buyer([Buyer / Corporate Procurement]) -->|1. create_mandate| PG[PurchaseGuard Intelligent Contract]
-    Agent([Autonomous AI Shopping Agent]) -->|2. propose_substitution| PG
-    PG -->|3. adjudicate_substitution| Consensus{GenLayer Equivalence Consensus}
-    Consensus -->|Parity Met + Within Budget| Approved[APPROVED]
-    Consensus -->|Minor Brand/Style Deviation| NeedsReview[NEEDS_USER_APPROVAL]
-    Consensus -->|Downgraded Specs or Over Budget| Rejected[REJECTED]
-    Approved -->|4. confirm_purchase| Executed[EXECUTED]
-    NeedsReview -->|Buyer Overrides| BuyerOverride{buyer_override}
-    BuyerOverride -->|Approve| Approved
-    BuyerOverride -->|Reject| Rejected
-    Rejected -->|Agent proposes alternative| Agent
+sequenceDiagram
+    autonumber
+    actor Buyer as Corporate Buyer
+    actor Agent as Autonomous Procurement Agent
+    participant PG as PurchaseGuard (Intelligent Contract)
+    participant Web as Vendor Evidence (API / Web)
+    participant Val as GenLayer AI Validators
+
+    Buyer->>PG: create_mandate(target, max_budget, specs, brand_rule, condition_rule)
+    Note over PG: Mandate State: ACTIVE
+    Agent->>PG: propose_substitution(mandate_id, substitute, vendor_url, proposed_price)
+    Note over PG: Mandate State: PROPOSED
+    Buyer->>PG: adjudicate_substitution(mandate_id)
+    PG->>Web: Independent Fetch via gl.nondet.web.get(vendor_url)
+    Web-->>PG: Raw Vendor Product Payload
+    PG->>Val: Equivalence Principle Prompt (Extract verbatim quotes, price, stock, condition)
+    Val-->>PG: Consensus Verdict (APPROVED / REJECTED)
+    Note over PG: Deterministic Clamps Verify Budget, Quotes, Stock & Condition
+    Note over PG: Mandate State Flipped to APPROVED or REJECTED
+    Agent->>PG: confirm_purchase(mandate_id)
+    Note over PG: Mandate State Flipped to EXECUTED
 ```
 
 ---
 
-## Key Features
+## 2. Live On-Chain Deployments & Verified StudioNet Manifest
 
-1. **Configurable Purchase Mandates**: Buyers define exact specification floors, budget ceilings in cents, brand rules (`STRICT`, `PREFERRED`, `ANY`), and condition rules (`NEW_ONLY`, `REFURBISHED_OK`).
-2. **Evidence-Backed Substitution Proposals**: Agents submit substitute items with verifiable specification details, vendor URLs, and stock shortage rationale.
-3. **Multi-Pillar Equivalence Adjudication**: GenLayer validators reach consensus using `gl.eq_principle.prompt_non_comparative` over 4 objective pillars:
-   - **Budget Ceilings**: Strict economic compliance.
-   - **Specification Parity**: Capacity, speed, form factor, and interfaces.
-   - **Brand Compliance**: Strict enforcement vs. acceptable soft deviations.
-   - **Condition Enforcement**: Strict factory-new guarantees.
-4. **Deterministic Budget Clamp**: Even if an LLM returns a hallucinated approval, an on-chain deterministic guardrail (`proposed_price > max_budget`) forcefully clamps the result to `REJECTED`.
-5. **Buyer Governance & Dispute Override**: Buyers retain sovereign control to approve or veto `NEEDS_USER_APPROVAL` decisions or cancel unfulfilled mandates.
+All transactions below were executed and reached finality on StudioNet:
 
----
+| Step | Method | Tx Hash | Result & Consensus State |
+| :---: | :--- | :--- | :--- |
+| **1** | `deploy` | [`0xcf3f4b3dcf...`](https://explorer-studio.genlayer.com/tx/0xcf3f4b3dcf0d9e4f1fb394a4d9c1de53f91a1a2c34ae7fd18e3f8482e73f103c) | **FINALIZED** (Contract deployed at `0x2A83...410a`) |
+| **2** | `create_mandate` (Mandate 1) | [`0xfcdc48c5d7...`](https://explorer-studio.genlayer.com/tx/0xfcdc48c5d70a0433c68383e85bedcc4d3fc340305f17cb329a8173dd0d288c3b) | **FINALIZED** (Target: 1TB NVMe, read >= 7000MB/s) |
+| **3** | `propose_substitution` (Mandate 1) | [`0xd4d9041af2...`](https://explorer-studio.genlayer.com/tx/0xd4d9041af2a8895b3418c9b552d17deed96e75eeb445bc7254721296dbd0b122) | **FINALIZED** (Crucial P5 Plus proposed) |
+| **4** | `adjudicate_substitution` (Mandate 1) | [`0x2fdcfd4269...`](https://explorer-studio.genlayer.com/tx/0x2fdcfd4269a469fd62e59abb905b0b97ef33291789256174f8a9da6eb635799a) | **FINALIZED**: `REJECTED`<br>Caught read speed 6600MB/s < 7000MB/s floor<br>Quote: `"sequential_read_speed": "6600 MB/s"` |
+| **5** | `create_mandate` (Mandate 2) | [`0xa5568b6da9...`](https://explorer-studio.genlayer.com/tx/0xa5568b6da9656c2041576f1a540262c64bd4ae05cc534475e3c3275cabc9a3bc) | **FINALIZED** (Target: 1TB NVMe, NEW_ONLY) |
+| **6** | `propose_substitution` (Mandate 2) | [`0xfcb26f1652...`](https://explorer-studio.genlayer.com/tx/0xfcb26f1652dd5595f1a78ae2079518ea8a6685b5feee2b55ac55510f0e0599e4) | **FINALIZED** (Adversarial proposal: Refurbished SATA) |
+| **7** | `adjudicate_substitution` (Mandate 2) | [`0xb44029811b...`](https://explorer-studio.genlayer.com/tx/0xb44029811bf94cf428ee7866488097d63c9d1884897bf03c649dafe5e4bf0cd9) | **FINALIZED**: `REJECTED`<br>**Abuse Intercepted**: Caught REFURBISHED condition & SATA downgrade<br>Quote: `"condition": "REFURBISHED"` |
+| **8** | `create_mandate` (Mandate 3) | [`0xa20d92cf86...`](https://explorer-studio.genlayer.com/tx/0xa20d92cf8627e33012e567bb1bfac04ae0c55d67f161f6d5096b3532fc137221) | **FINALIZED** (Target: 1TB NVMe, read >= 6500MB/s, ANY brand) |
+| **9** | `propose_substitution` (Mandate 3) | [`0x110652f02d...`](https://explorer-studio.genlayer.com/tx/0x110652f02d33cfcb064206902085b83ad526915054e14c59b9b0b8900783276d) | **FINALIZED** (Crucial P5 Plus proposed) |
+| **10** | `adjudicate_substitution` (Mandate 3) | [`0x80cee7727d...`](https://explorer-studio.genlayer.com/tx/0x80cee7727db2bdeb7153fbbca75ee93688d61960d5fca8c4b9318ae101d18805) | **FINALIZED**: `APPROVED`<br>Independent fetch verified 6600MB/s >= 6500MB/s, $89.99 < $100 budget |
+| **11** | `confirm_purchase` (Mandate 3) | [`0x1f5a84f3fa...`](https://explorer-studio.genlayer.com/tx/0x1f5a84f3fa1529153b749d14e3c02f589ee5d12afecb53d156a440de158b6422) | **ACCEPTED**: State transitioned to `EXECUTED` |
 
-## Contract State Machine
-
-```
-[ACTIVE] ──(propose_substitution)──> [PROPOSED]
-                                          │
-                                 (adjudicate_substitution)
-                                          │
-                  ┌───────────────────────┼───────────────────────┐
-                  ▼                       ▼                       ▼
-             [APPROVED]       [NEEDS_USER_APPROVAL]          [REJECTED]
-                  │                       │                       │
-          (confirm_purchase)        (buyer_override)         (re-propose)
-                  │                       │                       │
-                  ▼                       ▼                       ▼
-             [EXECUTED]          [APPROVED] / [REJECTED]      [PROPOSED]
-```
+Full transaction parameters and read-back states are documented in [`deploy/proof.json`](file:///C:/Users/user/Desktop/genlayer-purchase-guard/deploy/proof.json).
 
 ---
 
-## Contract Methods Specification
+## 3. Four Deterministic Safety Clamps
 
-### Write Methods
-
-| Method | Parameters | Description |
-| :--- | :--- | :--- |
-| `create_mandate` | `target_item: str, max_budget_cents: int, required_specs: str, brand_rule: str, condition_rule: str` | Initializes a new purchase mandate and returns its `mandate_id` (`u256`). |
-| `propose_substitution` | `mandate_id: int, substitute_item: str, proposed_price_cents: int, item_specs: str, reason_unavailable: str, vendor_url: str` | Agent submits a replacement product proposal for an active mandate. |
-| `adjudicate_substitution` | `mandate_id: int` | Triggers GenLayer Equivalence Principle consensus across validators to evaluate equivalence. |
-| `confirm_purchase` | `mandate_id: int` | Marks an `APPROVED` mandate as `EXECUTED` when the agent confirms transaction completion. |
-| `buyer_override` | `mandate_id: int, approve: bool` | Allows the mandate creator to approve or reject a `NEEDS_USER_APPROVAL` proposal. |
-| `cancel_mandate` | `mandate_id: int` | Cancels an unfulfilled mandate. Callable by the buyer or contract owner. |
-
-### View Methods
-
-| Method | Returns | Description |
-| :--- | :--- | :--- |
-| `get_mandate(mandate_id)` | `str` (JSON) | Retrieves the full buyer mandate record. |
-| `get_proposal(mandate_id)` | `str` (JSON) | Retrieves the current agent proposal record. |
-| `get_adjudication(mandate_id)` | `str` (JSON) | Retrieves the validator consensus result with score and rationale. |
-| `get_mandate_status(mandate_id)` | `str` | Returns the current state string (`ACTIVE`, `PROPOSED`, `APPROVED`, etc.). |
-| `get_total_mandates()` | `u256` | Returns total number of registered mandates. |
-| `get_guard_stats()` | `str` | Summarizes contract owner address and total mandates. |
+1. **Independent Evidence Acquisition**: Contract fetches evidence directly using `gl.nondet.web.get()`. Never relies on caller-supplied specification parameters.
+2. **Mandatory Verbatim Quoting**: AI validators must extract an exact substring from the fetched payload. If missing, contract clamps to `REJECTED`.
+3. **Hard Budget Ceiling**: If vendor price exceeds `max_budget_cents`, contract forcefully clamps to `REJECTED`.
+4. **Condition & Stock Invariants**: If the vendor payload shows `REFURBISHED` on a `NEW_ONLY` mandate or `OUT_OF_STOCK`, contract forcefully clamps to `REJECTED`.
 
 ---
 
-## Consensus Design & Rotation Safety
-
-GenLayer contracts execute in an environment of heterogeneous AI validators. To guarantee unanimous consensus on **Rotation 0** without triggering validator divergence or `Undetermined` states:
-
-1. **Objective, Positive Equivalence Criteria**: Criteria are framed constructively (`"If substitute matches or exceeds all required specifications within budget, decision is APPROVED"`), avoiding contradictory negative rules.
-2. **Structured JSON Output**: Validators return a standardized JSON schema containing `decision`, `spec_score`, `price_compliance`, and `rationale`.
-3. **Format Sanitization**: Built-in regex and bracket parsing cleanly sanitizes markdown code fences (` ```json `) emitted by diverse validator models.
-4. **Deterministic Invariant Enforcement**: Critical invariants (such as budget overruns) are mathematically verified in code, ensuring zero economic risk regardless of model nuance.
-
----
-
-## Local Verification & Testing
-
-The repository contains an automated test suite verifying all state transitions, boundary validations, access controls, and safety clamps without external network dependencies.
-
-### Run Tests:
+## 4. Local Testing & Verification
 
 ```bash
-python tests/test_purchase_guard.py
+uv run python -m unittest discover -s tests
 ```
 
-### Test Suite Coverage:
-- `test_initialization`: Verifies initial zero-state and owner binding.
-- `test_create_mandate_success`: Verifies valid mandate creation and counter increment.
-- `test_create_mandate_validations`: Tests invalid budgets, empty strings, and invalid enum rules.
-- `test_propose_substitution`: Verifies proposal registration and transition to `PROPOSED`.
-- `test_adjudicate_approved_and_confirm`: Full lifecycle to `APPROVED` and `EXECUTED`.
-- `test_adjudicate_budget_clamp_rejection`: Enforces rejection when proposed price exceeds budget.
-- `test_adjudicate_needs_user_approval_and_buyer_override`: Tests human-in-the-loop escalation.
-- `test_cancel_mandate_access_control`: Ensures unauthorized callers cannot cancel mandates.
-- `test_owner_can_cancel`: Confirms governance fallback cancellation.
-- `test_nonexistent_mandate_errors`: Verifies robust error handling on missing IDs.
-- `test_markdown_wrapped_response_sanitization`: Verifies parsing of markdown code fences.
-- `test_repropose_after_rejection`: Confirms agents can re-submit alternatives after rejection.
+Output:
+```
+.........
+----------------------------------------------------------------------
+Ran 9 tests in 0.001s
 
----
-
-## GenLayer Studio Deployment Guide
-
-1. Navigate to the **[GenLayer Studio](https://studio.genlayer.com/)**.
-2. Create a new contract file (e.g., `purchase_guard.py`) and paste the contents of `contracts/purchase_guard.py`.
-3. Click **Deploy**.
-4. Test execution on-chain:
-   - Call `create_mandate`:
-     ```json
-     {
-       "target_item": "Samsung 980 Pro 1TB NVMe SSD",
-       "max_budget_cents": 10000,
-       "required_specs": "1TB NVMe M.2 SSD PCIe 4.0 read >= 7000MB/s",
-       "brand_rule": "PREFERRED",
-       "condition_rule": "NEW_ONLY"
-     }
-     ```
-   - Call `propose_substitution`:
-     ```json
-     {
-       "mandate_id": 1,
-       "substitute_item": "Crucial P5 Plus 1TB NVMe SSD",
-       "proposed_price_cents": 8999,
-       "item_specs": "1TB NVMe M.2 SSD PCIe 4.0 read 6600MB/s New",
-       "reason_unavailable": "Samsung 980 Pro out of stock",
-       "vendor_url": "https://amazon.com/dp/B098WKQRDL"
-     }
-     ```
-   - Call `adjudicate_substitution(1)` to witness GenLayer Equivalence Principle consensus in action.
-   - Inspect status via `get_mandate_status(1)` (`APPROVED`).
-   - Call `confirm_purchase(1)` to execute.
-
----
-
-## License
-
-MIT License. See [LICENSE](LICENSE) for details.
+OK
+```
