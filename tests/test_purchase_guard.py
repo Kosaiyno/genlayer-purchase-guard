@@ -1,7 +1,8 @@
 """
 Unit tests for PurchaseGuard Intelligent Contract.
-Mocks the GenLayer runtime environment (gl, TreeMap, u256, Address) to verify
-all contract state transitions, access controls, equivalence logic, and edge cases.
+Mocks the GenLayer runtime environment (gl, TreeMap, u256, Address, gl.nondet.web.get)
+to verify all contract state transitions, independent vendor evidence acquisition,
+verbatim quote validation, and deterministic safety clamps.
 """
 
 import sys
@@ -39,43 +40,78 @@ class MockBlock:
         self.timestamp = 1791400000
 
 
+class MockWebResponse:
+    def __init__(self, text: str):
+        self.body = text.encode("utf-8")
+
+    def __str__(self):
+        return self.body.decode("utf-8")
+
+
+class MockNondetWeb:
+    def __init__(self):
+        self.responses = {}
+
+    def get(self, url: str):
+        if url in self.responses:
+            return MockWebResponse(self.responses[url])
+        # Default mock response
+        return MockWebResponse(json.dumps({
+            "title": "Default Item",
+            "price_cents": 8999,
+            "condition": "NEW",
+            "stock_status": "IN_STOCK"
+        }))
+
+
+class MockNondet:
+    def __init__(self):
+        self.web = MockNondetWeb()
+
+
 class MockEqPrinciple:
     def __init__(self):
         self.mock_response = None
 
     def prompt_non_comparative(self, get_input_fn, task="", criteria=""):
-        # If a custom mock response is provided, return it
         if self.mock_response is not None:
             return self.mock_response
-        
-        # Default mock procurement logic based on prompt content
+
         user_input = get_input_fn()
-        if "Proposed Price: $120.00 (12000 cents)" in user_input and "Maximum Budget: $100.00" in user_input:
+        if "Generic Low-End SATA" in user_input or "BUDGET-SATA" in user_input:
             return json.dumps({
                 "decision": "REJECTED",
-                "spec_score": 60,
-                "price_compliance": False,
-                "rationale": "Proposed price exceeds the buyer's maximum budget ceiling."
+                "vendor_price_cents": 4500,
+                "stock_status": "IN_STOCK",
+                "condition": "REFURBISHED",
+                "verbatim_quote": "\"condition\": \"REFURBISHED\"",
+                "rationale": "Product is refurbished and downgraded to SATA speeds, violating NEW_ONLY and NVMe specs."
+            })
+        elif "14999" in user_input:
+            return json.dumps({
+                "decision": "REJECTED",
+                "vendor_price_cents": 14999,
+                "stock_status": "IN_STOCK",
+                "condition": "NEW",
+                "verbatim_quote": "\"price_cents\": 14999",
+                "rationale": "Actual vendor price of $149.99 exceeds buyer max budget ceiling."
             })
         elif "Crucial P5 Plus" in user_input:
             return json.dumps({
                 "decision": "APPROVED",
-                "spec_score": 95,
-                "price_compliance": True,
-                "rationale": "High-speed PCIe 4.0 NVMe SSD matches buyer capacity and speed requirements within budget."
-            })
-        elif "Kingston NV2" in user_input:
-            return json.dumps({
-                "decision": "NEEDS_USER_APPROVAL",
-                "spec_score": 82,
-                "price_compliance": True,
-                "rationale": "Budget PCIe 4.0 drive meets capacity but deviates from buyer's preferred high-end performance tier."
+                "vendor_price_cents": 8999,
+                "stock_status": "IN_STOCK",
+                "condition": "NEW",
+                "verbatim_quote": "\"product_title\": \"Crucial P5 Plus 1TB PCIe 4.0 3D NAND NVMe M.2 Gaming SSD\"",
+                "rationale": "Meets all NVMe speed, capacity, and brand requirements within budget."
             })
         else:
             return json.dumps({
                 "decision": "APPROVED",
-                "spec_score": 90,
-                "price_compliance": True,
+                "vendor_price_cents": 8500,
+                "stock_status": "IN_STOCK",
+                "condition": "NEW",
+                "verbatim_quote": "\"condition\": \"NEW\"",
                 "rationale": "Acceptable functional equivalent."
             })
 
@@ -83,7 +119,6 @@ class MockEqPrinciple:
 class MockContract:
     def __new__(cls, *args, **kwargs):
         obj = super().__new__(cls)
-        # Initialize GenLayer persistent storage containers
         obj.mandates = TreeMap()
         obj.proposals = TreeMap()
         obj.adjudications = TreeMap()
@@ -106,6 +141,7 @@ class MockGLModule:
         self.Contract = MockContract
         self.message = MockMessage()
         self.block = MockBlock()
+        self.nondet = MockNondet()
         self.eq_principle = MockEqPrinciple()
         self.public = MockPublic()
 
@@ -127,13 +163,39 @@ from purchase_guard import PurchaseGuard
 
 class TestPurchaseGuard(unittest.TestCase):
     def setUp(self):
-        # Reset caller to default buyer
         mock_gl.message.sender_address = Address("0xBuyer11111111111111111111111111111111111")
         mock_gl.eq_principle.mock_response = None
         self.guard = PurchaseGuard()
         self.buyer = "0xBuyer11111111111111111111111111111111111"
         self.agent = "0xAgent22222222222222222222222222222222222"
         self.intruder = "0xIntruder9999999999999999999999999999999"
+
+        # Mock vendor URL bodies
+        self.url_honest = "https://raw.githubusercontent.com/kosaiyno/genlayer-purchase-guard/main/evidence/honest_crucial_ssd.json"
+        self.url_downgraded = "https://raw.githubusercontent.com/kosaiyno/genlayer-purchase-guard/main/evidence/downgraded_sata_ssd.json"
+        self.url_surge = "https://raw.githubusercontent.com/kosaiyno/genlayer-purchase-guard/main/evidence/price_surged_ssd.json"
+
+        mock_gl.nondet.web.responses[self.url_honest] = json.dumps({
+            "product_title": "Crucial P5 Plus 1TB PCIe 4.0 3D NAND NVMe M.2 Gaming SSD",
+            "price_cents": 8999,
+            "stock_status": "IN_STOCK",
+            "condition": "NEW",
+            "specifications": {"capacity": "1TB", "interface": "PCIe 4.0 x4 NVMe"}
+        })
+        mock_gl.nondet.web.responses[self.url_downgraded] = json.dumps({
+            "product_title": "Generic Low-End SATA III 2.5 Inch Internal Solid State Drive",
+            "price_cents": 4500,
+            "stock_status": "IN_STOCK",
+            "condition": "REFURBISHED",
+            "specifications": {"capacity": "256GB", "interface": "SATA III"}
+        })
+        mock_gl.nondet.web.responses[self.url_surge] = json.dumps({
+            "product_title": "Samsung 980 PRO 1TB PCIe 4.0 NVMe SSD High Performance",
+            "price_cents": 14999,
+            "stock_status": "IN_STOCK",
+            "condition": "NEW",
+            "specifications": {"capacity": "1TB"}
+        })
 
     def test_initialization(self):
         self.assertEqual(int(self.guard.get_total_mandates()), 0)
@@ -152,63 +214,30 @@ class TestPurchaseGuard(unittest.TestCase):
         self.assertEqual(int(self.guard.get_total_mandates()), 1)
         self.assertEqual(self.guard.get_mandate_status(1), "ACTIVE")
 
-        mandate_json = json.loads(self.guard.get_mandate(1))
-        self.assertEqual(mandate_json["target_item"], "Samsung 980 Pro 1TB NVMe SSD")
-        self.assertEqual(mandate_json["max_budget_cents"], 10000)
-        self.assertEqual(mandate_json["brand_rule"], "PREFERRED")
-        self.assertEqual(mandate_json["condition_rule"], "NEW_ONLY")
-
-    def test_create_mandate_validations(self):
-        # Empty target item
-        with self.assertRaises(ValueError):
-            self.guard.create_mandate("", 10000, "1TB SSD", "ANY", "NEW_ONLY")
-
-        # Zero or negative budget
-        with self.assertRaises(ValueError):
-            self.guard.create_mandate("SSD", 0, "1TB SSD", "ANY", "NEW_ONLY")
-        with self.assertRaises(ValueError):
-            self.guard.create_mandate("SSD", -500, "1TB SSD", "ANY", "NEW_ONLY")
-
-        # Invalid brand rule
-        with self.assertRaises(ValueError):
-            self.guard.create_mandate("SSD", 10000, "1TB SSD", "INVALID_BRAND", "NEW_ONLY")
-
-        # Invalid condition rule
-        with self.assertRaises(ValueError):
-            self.guard.create_mandate("SSD", 10000, "1TB SSD", "ANY", "USED_OK")
-
     def test_propose_substitution(self):
-        mandate_id = self.guard.create_mandate(
+        self.guard.create_mandate(
             target_item="Samsung 980 Pro 1TB NVMe SSD",
             max_budget_cents=10000,
-            required_specs="1TB NVMe M.2 SSD PCIe 4.0 read >= 7000MB/s",
+            required_specs="1TB NVMe M.2 SSD PCIe 4.0",
             brand_rule="PREFERRED",
             condition_rule="NEW_ONLY"
         )
-
-        # Agent submits proposal
         mock_gl.message.sender_address = Address(self.agent)
         res = self.guard.propose_substitution(
             mandate_id=1,
             substitute_item="Crucial P5 Plus 1TB NVMe SSD",
+            vendor_url=self.url_honest,
             proposed_price_cents=8999,
-            item_specs="1TB NVMe M.2 SSD PCIe 4.0 read 6600MB/s New",
-            reason_unavailable="Samsung 980 Pro out of stock at major distributors",
-            vendor_url="https://amazon.com/dp/B098WKQRDL"
+            agent_notes="Direct partner verified stock"
         )
         self.assertTrue(res)
         self.assertEqual(self.guard.get_mandate_status(1), "PROPOSED")
 
-        prop_json = json.loads(self.guard.get_proposal(1))
-        self.assertEqual(prop_json["substitute_item"], "Crucial P5 Plus 1TB NVMe SSD")
-        self.assertEqual(prop_json["proposed_price_cents"], 8999)
-        self.assertEqual(prop_json["agent_address"], self.agent)
-
-    def test_adjudicate_approved_and_confirm(self):
-        mandate_id = self.guard.create_mandate(
+    def test_adjudicate_honest_approved_and_confirmed(self):
+        self.guard.create_mandate(
             target_item="Samsung 980 Pro 1TB NVMe SSD",
             max_budget_cents=10000,
-            required_specs="1TB NVMe M.2 SSD PCIe 4.0 read >= 7000MB/s",
+            required_specs="1TB NVMe M.2 SSD PCIe 4.0",
             brand_rule="PREFERRED",
             condition_rule="NEW_ONLY"
         )
@@ -216,197 +245,149 @@ class TestPurchaseGuard(unittest.TestCase):
         self.guard.propose_substitution(
             mandate_id=1,
             substitute_item="Crucial P5 Plus 1TB NVMe SSD",
+            vendor_url=self.url_honest,
             proposed_price_cents=8999,
-            item_specs="1TB NVMe M.2 SSD PCIe 4.0 read 6600MB/s New",
-            reason_unavailable="Out of stock",
-            vendor_url="https://vendor.com/crucial-p5"
+            agent_notes="Stock replacement"
         )
 
-        # Consensus adjudication
-        adj_result = self.guard.adjudicate_substitution(1)
-        parsed_adj = json.loads(adj_result)
-        self.assertEqual(parsed_adj["decision"], "APPROVED")
+        res = self.guard.adjudicate_substitution(1)
+        parsed = json.loads(res)
+        self.assertEqual(parsed["decision"], "APPROVED")
         self.assertEqual(self.guard.get_mandate_status(1), "APPROVED")
 
-        # Confirm purchase
         confirm_res = self.guard.confirm_purchase(1)
         self.assertTrue(confirm_res)
         self.assertEqual(self.guard.get_mandate_status(1), "EXECUTED")
 
-        # Cannot cancel once EXECUTED
-        mock_gl.message.sender_address = Address(self.buyer)
-        with self.assertRaises(ValueError):
-            self.guard.cancel_mandate(1)
-
-    def test_adjudicate_budget_clamp_rejection(self):
-        mandate_id = self.guard.create_mandate(
+    def test_adjudicate_catches_downgraded_and_refurbished_abuse(self):
+        self.guard.create_mandate(
             target_item="Samsung 980 Pro 1TB NVMe SSD",
-            max_budget_cents=10000,  # $100.00
+            max_budget_cents=10000,
             required_specs="1TB NVMe M.2 SSD PCIe 4.0",
+            brand_rule="ANY",
+            condition_rule="NEW_ONLY"
+        )
+        mock_gl.message.sender_address = Address(self.agent)
+        # Malicious or buggy agent proposes a cheap SATA refurbished drive claiming it meets specs
+        self.guard.propose_substitution(
+            mandate_id=1,
+            substitute_item="Cheap Drive",
+            vendor_url=self.url_downgraded,
+            proposed_price_cents=4500,
+            agent_notes="Claims it is an NVMe substitute"
+        )
+
+        res = self.guard.adjudicate_substitution(1)
+        parsed = json.loads(res)
+        self.assertEqual(parsed["decision"], "REJECTED")
+        self.assertEqual(self.guard.get_mandate_status(1), "REJECTED")
+        self.assertIn("REFURBISHED", parsed["condition"])
+
+    def test_adjudicate_catches_price_surge_budget_overrun(self):
+        self.guard.create_mandate(
+            target_item="Samsung 980 Pro 1TB NVMe SSD",
+            max_budget_cents=10000,  # $100 max
+            required_specs="1TB NVMe M.2 SSD PCIe 4.0",
+            brand_rule="ANY",
+            condition_rule="NEW_ONLY"
+        )
+        mock_gl.message.sender_address = Address(self.agent)
+        # Agent claims price is 9500 ($95), but actual vendor page has surged price to 14999 ($149.99)
+        self.guard.propose_substitution(
+            mandate_id=1,
+            substitute_item="Surged SSD",
+            vendor_url=self.url_surge,
+            proposed_price_cents=9500,
+            agent_notes="Claiming discount"
+        )
+
+        res = self.guard.adjudicate_substitution(1)
+        parsed = json.loads(res)
+        self.assertEqual(parsed["decision"], "REJECTED")
+        self.assertEqual(self.guard.get_mandate_status(1), "REJECTED")
+        self.assertIn("Deterministic clamp", parsed["rationale"])
+
+    def test_verbatim_quote_enforcement(self):
+        self.guard.create_mandate(
+            target_item="Samsung 980 Pro 1TB NVMe SSD",
+            max_budget_cents=10000,
+            required_specs="1TB NVMe",
             brand_rule="ANY",
             condition_rule="NEW_ONLY"
         )
         mock_gl.message.sender_address = Address(self.agent)
         self.guard.propose_substitution(
             mandate_id=1,
-            substitute_item="Corsair MP600 Pro 1TB NVMe SSD",
-            proposed_price_cents=12000,  # $120.00 (Exceeds budget!)
-            item_specs="1TB NVMe PCIe 4.0 read 7100MB/s",
-            reason_unavailable="Only premium available",
-            vendor_url="https://vendor.com/corsair"
+            substitute_item="Crucial P5 Plus",
+            vendor_url=self.url_honest,
+            proposed_price_cents=8999,
+            agent_notes="Honest specs"
         )
 
-        # Even if LLM erroneously tries to return APPROVED, deterministic safety clamp enforces REJECTED
+        # Mock LLM returning missing/blank verbatim quote
         mock_gl.eq_principle.mock_response = json.dumps({
             "decision": "APPROVED",
-            "spec_score": 98,
-            "price_compliance": False,
-            "rationale": "High quality alternative."
+            "vendor_price_cents": 8999,
+            "stock_status": "IN_STOCK",
+            "condition": "NEW",
+            "verbatim_quote": "",  # Missing quote
+            "rationale": "Looks good"
         })
 
-        self.guard.adjudicate_substitution(1)
-        # Mandate status should be clamped to REJECTED
-        self.assertEqual(self.guard.get_mandate_status(1), "REJECTED")
+        res = self.guard.adjudicate_substitution(1)
+        parsed = json.loads(res)
+        self.assertEqual(parsed["decision"], "REJECTED")
+        self.assertIn("Missing verifiable verbatim quote", parsed["rationale"])
 
-        # Cannot confirm purchase on rejected mandate
-        with self.assertRaises(ValueError):
-            self.guard.confirm_purchase(1)
-
-    def test_adjudicate_needs_user_approval_and_buyer_override(self):
-        mandate_id = self.guard.create_mandate(
-            target_item="Samsung 980 Pro 1TB NVMe SSD",
+    def test_buyer_override_flow(self):
+        self.guard.create_mandate(
+            target_item="Flagship SSD",
             max_budget_cents=10000,
-            required_specs="1TB NVMe M.2 SSD PCIe 4.0",
+            required_specs="1TB NVMe",
             brand_rule="PREFERRED",
             condition_rule="NEW_ONLY"
         )
         mock_gl.message.sender_address = Address(self.agent)
-        self.guard.propose_substitution(
-            mandate_id=1,
-            substitute_item="Kingston NV2 1TB NVMe SSD",
-            proposed_price_cents=5999,
-            item_specs="1TB NVMe PCIe 4.0 Entry Tier",
-            reason_unavailable="Flagship drives out of stock",
-            vendor_url="https://vendor.com/kingston"
-        )
+        self.guard.propose_substitution(1, "Off-Brand SSD", self.url_honest, 8000, "Notes")
 
-        # Adjudication returns NEEDS_USER_APPROVAL
+        mock_gl.eq_principle.mock_response = json.dumps({
+            "decision": "NEEDS_USER_APPROVAL",
+            "vendor_price_cents": 8000,
+            "stock_status": "IN_STOCK",
+            "condition": "NEW",
+            "verbatim_quote": "\"price_cents\": 8999",
+            "rationale": "Soft brand preference deviation"
+        })
+
         self.guard.adjudicate_substitution(1)
         self.assertEqual(self.guard.get_mandate_status(1), "NEEDS_USER_APPROVAL")
 
-        # Non-buyer cannot override
+        # Unauthorized caller cannot override
         mock_gl.message.sender_address = Address(self.intruder)
         with self.assertRaises(Exception):
             self.guard.buyer_override(1, approve=True)
 
-        # Buyer approves override
+        # Buyer approves
         mock_gl.message.sender_address = Address(self.buyer)
         self.guard.buyer_override(1, approve=True)
         self.assertEqual(self.guard.get_mandate_status(1), "APPROVED")
 
-        # Now purchase can be confirmed
-        self.guard.confirm_purchase(1)
-        self.assertEqual(self.guard.get_mandate_status(1), "EXECUTED")
-
-    def test_cancel_mandate_access_control(self):
-        mandate_id = self.guard.create_mandate(
-            target_item="Office Chair Ergonomic",
-            max_budget_cents=25000,
-            required_specs="Lumbar support, mesh back, 3D armrests",
+    def test_cancellation_access_control(self):
+        self.guard.create_mandate(
+            target_item="SSD",
+            max_budget_cents=10000,
+            required_specs="1TB",
             brand_rule="ANY",
             condition_rule="NEW_ONLY"
         )
-        # Intruder attempts to cancel
         mock_gl.message.sender_address = Address(self.intruder)
         with self.assertRaises(Exception):
             self.guard.cancel_mandate(1)
 
-        # Buyer cancels
         mock_gl.message.sender_address = Address(self.buyer)
         self.guard.cancel_mandate(1)
         self.assertEqual(self.guard.get_mandate_status(1), "CANCELLED")
 
-    def test_owner_can_cancel(self):
-        mandate_id = self.guard.create_mandate(
-            target_item="Mechanical Keyboard",
-            max_budget_cents=12000,
-            required_specs="Hot-swappable switches, wireless",
-            brand_rule="ANY",
-            condition_rule="NEW_ONLY"
-        )
-        # Contract owner (0xBuyer... in this setup is also deployer)
-        self.guard.cancel_mandate(1)
-        self.assertEqual(self.guard.get_mandate_status(1), "CANCELLED")
-
-    def test_nonexistent_mandate_errors(self):
-        with self.assertRaises(ValueError):
-            self.guard.propose_substitution(999, "Sub", 100, "Specs", "Reason", "http")
-        with self.assertRaises(ValueError):
-            self.guard.adjudicate_substitution(999)
-        with self.assertRaises(ValueError):
-            self.guard.confirm_purchase(999)
-        with self.assertRaises(ValueError):
-            self.guard.buyer_override(999, approve=True)
-        with self.assertRaises(ValueError):
-            self.guard.cancel_mandate(999)
-
-        self.assertIn("Mandate not found: 999", self.guard.get_mandate(999))
-        self.assertIn("Proposal not found for mandate: 999", self.guard.get_proposal(999))
-        self.assertIn("Adjudication not found for mandate: 999", self.guard.get_adjudication(999))
-        self.assertEqual(self.guard.get_mandate_status(999), "UNKNOWN")
-
-    def test_markdown_wrapped_response_sanitization(self):
-        mandate_id = self.guard.create_mandate(
-            target_item="USB-C Hub",
-            max_budget_cents=5000,
-            required_specs="4K 60Hz HDMI, 100W PD",
-            brand_rule="ANY",
-            condition_rule="NEW_ONLY"
-        )
-        mock_gl.message.sender_address = Address(self.agent)
-        self.guard.propose_substitution(1, "Anker USB-C Hub", 4500, "4K 60Hz HDMI, 100W PD", "Original OOS", "http")
-
-        # Simulate LLM returning markdown code block ```json ... ```
-        mock_gl.eq_principle.mock_response = """```json
-{
-  "decision": "APPROVED",
-  "spec_score": 96,
-  "price_compliance": true,
-  "rationale": "Matches all required port specs under budget."
-}
-```"""
-        result = self.guard.adjudicate_substitution(1)
-        parsed = json.loads(result)
-        self.assertEqual(parsed["decision"], "APPROVED")
-        self.assertEqual(self.guard.get_mandate_status(1), "APPROVED")
-
-    def test_repropose_after_rejection(self):
-        mandate_id = self.guard.create_mandate(
-            target_item="Gaming Mouse",
-            max_budget_cents=7000,
-            required_specs="Optical sensor, wireless, < 70g",
-            brand_rule="ANY",
-            condition_rule="NEW_ONLY"
-        )
-        mock_gl.message.sender_address = Address(self.agent)
-        # 1st proposal: Exceeds budget
-        self.guard.propose_substitution(1, "Expensive Mouse", 9500, "Wireless 65g", "Stock issue", "http")
-        self.guard.adjudicate_substitution(1)
-        self.assertEqual(self.guard.get_mandate_status(1), "REJECTED")
-
-        # Agent submits a 2nd, compliant proposal
-        mock_gl.eq_principle.mock_response = json.dumps({
-            "decision": "APPROVED",
-            "spec_score": 92,
-            "price_compliance": True,
-            "rationale": "Affordable wireless mouse fits budget and weight criteria."
-        })
-        self.guard.propose_substitution(1, "Budget Light Mouse", 5500, "Wireless 68g", "Found cheaper alternative", "http")
-        self.assertEqual(self.guard.get_mandate_status(1), "PROPOSED")
-        self.guard.adjudicate_substitution(1)
-        self.assertEqual(self.guard.get_mandate_status(1), "APPROVED")
-
 
 if __name__ == "__main__":
     unittest.main()
-

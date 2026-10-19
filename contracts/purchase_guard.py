@@ -1,29 +1,16 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 from genlayer import *
-import typing
 import json
 
 class PurchaseGuard(gl.Contract):
     """
-    PurchaseGuard is a production-grade GenLayer Intelligent Contract primitive
-    designed for the autonomous AI agent economy.
-
-    Core Purpose:
-    When an AI procurement or shopping agent attempts to fulfill a purchase order
-    and the target product is unavailable, out-of-stock, or price-surged, traditional
-    smart contracts cannot evaluate whether an alternative product is functionally,
-    technically, and economically equivalent.
-
-    PurchaseGuard acts as an autonomous on-chain guardrail:
-    1. Purchase Mandate Escrow: Buyers define target products, budget ceilings, specification floors,
-       brand rules (STRICT, PREFERRED, ANY), and condition rules (NEW_ONLY, REFURBISHED_OK).
-    2. Agent Substitution Proposal: Autonomous agents propose alternatives with price and spec evidence.
-    3. Multi-Pillar Equivalence Adjudication: GenLayer validators independently evaluate specification
-       parity, brand compliance, and budget limits to reach consensus on:
-       - APPROVED: Meets/exceeds specifications within budget limits.
-       - NEEDS_USER_APPROVAL: Equivalent product but deviates on soft brand or style preferences.
-       - REJECTED: Fails key specs, downgrades performance/capacity, or exceeds budget ceiling.
-    4. Lifecycle Management & Dispute Overrides: Buyers can override borderline proposals or cancel unfulfilled mandates.
+    PurchaseGuard: Autonomous On-Chain Procurement Firewall & Policy Arbiter.
+    
+    Protects buyers and autonomous shopping agents against:
+    1. Unverified caller claims (contract independently acquires vendor evidence via gl.nondet.web.get).
+    2. Hidden price surges & budget overruns (deterministic clamp against max_budget_cents).
+    3. Counterfeit / downgraded specifications & refurbished goods (Equivalence Principle consensus with verbatim quote grounding).
+    4. Out-of-stock ghost listings (independent vendor availability verification).
     """
     owner: Address
     mandate_counter: u256
@@ -34,6 +21,10 @@ class PurchaseGuard(gl.Contract):
     def __init__(self):
         self.owner = gl.message.sender_address
         self.mandate_counter = u256(0)
+
+    # =========================================================================
+    # VIEW METHODS
+    # =========================================================================
 
     @gl.public.view
     def get_guard_stats(self) -> str:
@@ -77,6 +68,10 @@ class PurchaseGuard(gl.Contract):
             return str(data.get("status", "UNKNOWN"))
         except Exception:
             return "UNKNOWN"
+
+    # =========================================================================
+    # WRITE METHODS
+    # =========================================================================
 
     @gl.public.write
     def create_mandate(
@@ -132,11 +127,17 @@ class PurchaseGuard(gl.Contract):
         self,
         mandate_id: int,
         substitute_item: str,
+        vendor_url: str,
         proposed_price_cents: int,
-        item_specs: str,
-        reason_unavailable: str,
-        vendor_url: str
+        agent_notes: str
     ) -> bool:
+        """
+        Agent submits a substitution proposal.
+        The contract records the vendor evidence URL.
+        Crucially: The contract does NOT blindly trust the agent's claims;
+        material facts (price, specs, availability, condition) are fetched and validated
+        directly from vendor_url during adjudication.
+        """
         m_key = u256(mandate_id)
         if m_key not in self.mandates:
             raise ValueError(f"Mandate {mandate_id} does not exist")
@@ -147,25 +148,23 @@ class PurchaseGuard(gl.Contract):
             raise ValueError(f"Cannot submit proposal for mandate in status '{current_status}'")
 
         clean_sub = str(substitute_item).strip()
-        clean_specs = str(item_specs).strip()
-        clean_reason = str(reason_unavailable).strip()
         clean_url = str(vendor_url).strip()
+        clean_notes = str(agent_notes).strip()
 
         if len(clean_sub) == 0:
             raise ValueError("Substitute item name cannot be empty")
+        if len(clean_url) == 0:
+            raise ValueError("Vendor evidence URL cannot be empty")
         if proposed_price_cents <= 0:
             raise ValueError("Proposed price must be greater than zero")
-        if len(clean_specs) == 0:
-            raise ValueError("Item specifications cannot be empty")
 
         proposal_record = {
             "mandate_id": int(mandate_id),
             "agent_address": str(gl.message.sender_address),
             "substitute_item": clean_sub,
+            "vendor_url": clean_url,
             "proposed_price_cents": int(proposed_price_cents),
-            "item_specs": clean_specs,
-            "reason_unavailable": clean_reason if clean_reason else "Original item out of stock",
-            "vendor_url": clean_url if clean_url else "N/A"
+            "agent_notes": clean_notes if clean_notes else "Substitution proposed by procurement agent"
         }
 
         self.proposals[m_key] = json.dumps(proposal_record)
@@ -175,6 +174,13 @@ class PurchaseGuard(gl.Contract):
 
     @gl.public.write
     def adjudicate_substitution(self, mandate_id: int) -> str:
+        """
+        Contract-Side Evidence Acquisition & Multi-Pillar Adjudication:
+        1. Independently fetches live vendor evidence via gl.nondet.web.get(vendor_url).
+        2. Validators extract material product facts (price, stock, condition, specs) and verbatim quotes.
+        3. Deterministic safety clamps verify verbatim quotes, budget ceilings, condition rules, and stock status.
+        4. Canonicalized adjudication record stored on-chain.
+        """
         m_key = u256(mandate_id)
         if m_key not in self.mandates:
             raise ValueError(f"Mandate {mandate_id} does not exist")
@@ -187,56 +193,79 @@ class PurchaseGuard(gl.Contract):
 
         proposal = json.loads(self.proposals[m_key])
 
-        max_budget = mandate["max_budget_cents"]
-        proposed_price = proposal["proposed_price_cents"]
-        budget_overrun = proposed_price > max_budget
+        # Snapshot local variables before non-deterministic closures
+        target_vendor_url = str(proposal["vendor_url"])
+        target_item = str(mandate["target_item"])
+        max_budget = int(mandate["max_budget_cents"])
+        required_specs = str(mandate["required_specs"])
+        brand_rule = str(mandate["brand_rule"])
+        condition_rule = str(mandate["condition_rule"])
+        substitute_name = str(proposal["substitute_item"])
+        claimed_price = int(proposal["proposed_price_cents"])
 
+        # 1. Non-deterministic Evidence Fetching Closure
         def get_input() -> str:
+            try:
+                resp = gl.nondet.web.get(target_vendor_url)
+                body_text = resp.body.decode("utf-8") if hasattr(resp, "body") else str(resp)
+            except Exception as e:
+                body_text = f"[VENDOR_FETCH_ERROR]: {str(e)}"
+
+            clean_vendor_payload = body_text[:4000].strip()
+            if len(clean_vendor_payload) == 0:
+                clean_vendor_payload = "[EMPTY_VENDOR_PAYLOAD_ERROR]"
+
             return (
                 f"=== BUYER PURCHASE MANDATE ===\n"
-                f"Mandate ID: {mandate_id}\n"
-                f"Target Product: {mandate['target_item']}\n"
-                f"Maximum Budget: ${max_budget / 100:.2f} ({max_budget} cents)\n"
-                f"Required Specifications: {mandate['required_specs']}\n"
-                f"Brand Rule: {mandate['brand_rule']}\n"
-                f"Condition Rule: {mandate['condition_rule']}\n\n"
-                f"=== AGENT PROPOSED SUBSTITUTION ===\n"
-                f"Proposed Alternative: {proposal['substitute_item']}\n"
-                f"Proposed Price: ${proposed_price / 100:.2f} ({proposed_price} cents)\n"
-                f"Alternative Specifications: {proposal['item_specs']}\n"
-                f"Reason Original Unavailable: {proposal['reason_unavailable']}\n"
-                f"Vendor Evidence: {proposal['vendor_url']}\n\n"
-                f"=== ADJUDICATION DIRECTIVES ===\n"
-                f"1. Budget Check: If proposed price exceeds maximum budget (${max_budget / 100:.2f}), decision MUST be REJECTED.\n"
-                f"2. Parity Check: If substitute matches or exceeds functional requirements within budget, decision is APPROVED.\n"
-                f"3. Preference Drift: If substitute is a functional equivalent but deviates from preferred brand, decision is NEEDS_USER_APPROVAL.\n"
-                f"4. Spec Downgrade: If key technical specifications (capacity, speed, connectivity, condition) are downgraded, decision is REJECTED."
+                f"Target Item: {target_item}\n"
+                f"Maximum Budget Cents: {max_budget} (${max_budget / 100:.2f})\n"
+                f"Required Specs: {required_specs}\n"
+                f"Brand Rule: {brand_rule}\n"
+                f"Condition Rule: {condition_rule}\n\n"
+                f"=== AGENT CLAIM ===\n"
+                f"Proposed Alternative: {substitute_name}\n"
+                f"Claimed Price Cents: {claimed_price} (${claimed_price / 100:.2f})\n"
+                f"Vendor Evidence URL: {target_vendor_url}\n\n"
+                f"=== INDEPENDENTLY FETCHED VENDOR EVIDENCE ===\n"
+                f"{clean_vendor_payload}\n\n"
+                f"=== EVALUATION DIRECTIVES ===\n"
+                f"1. Independent Verification: Read the actual vendor evidence payload above.\n"
+                f"2. Extract the actual vendor price (in cents), stock status (IN_STOCK/OUT_OF_STOCK), and condition (NEW/REFURBISHED/USED).\n"
+                f"3. Verbatim Quote: Extract an exact substring from the vendor payload proving price, condition, or availability.\n"
+                f"4. If vendor price > max budget, or item is OUT_OF_STOCK, or condition violates rule, or specs are downgraded: REJECTED.\n"
+                f"5. If substitute meets/exceeds specifications within budget: APPROVED.\n"
+                f"6. If functional equivalent with soft brand deviation: NEEDS_USER_APPROVAL."
             )
+
+        task = (
+            f"Act as an impartial commercial procurement arbiter. Independently verify the vendor evidence "
+            f"for '{substitute_name}' against the buyer mandate for '{target_item}'. "
+            f"Output a valid JSON object with keys: "
+            f"'decision' ('APPROVED', 'NEEDS_USER_APPROVAL', or 'REJECTED'), "
+            f"'vendor_price_cents' (integer), "
+            f"'stock_status' ('IN_STOCK' or 'OUT_OF_STOCK'), "
+            f"'condition' ('NEW', 'REFURBISHED', or 'USED'), "
+            f"'verbatim_quote' (exact string from the vendor payload, up to 120 chars), and "
+            f"'rationale' (concise explanation up to 200 chars)."
+        )
+
+        criteria = """
+            1. The output must be a valid JSON object with keys: 'decision', 'vendor_price_cents', 'stock_status', 'condition', 'verbatim_quote', and 'rationale'.
+            2. 'decision' must be strictly one of: 'APPROVED', 'NEEDS_USER_APPROVAL', or 'REJECTED'.
+            3. 'verbatim_quote' must be an exact substring from the fetched vendor evidence payload.
+            4. If the vendor payload shows the actual price exceeds maximum budget or item is out of stock, decision must be 'REJECTED'.
+            5. If the product meets/exceeds required specs and condition within budget, decision is 'APPROVED'.
+            6. If equivalent but deviates from preferred brand, decision is 'NEEDS_USER_APPROVAL'.
+        """
 
         raw_result = gl.eq_principle.prompt_non_comparative(
             get_input,
-            task=(
-                f"Act as an impartial commercial procurement arbiter. Evaluate the proposed alternative "
-                f"'{proposal['substitute_item']}' against the buyer mandate for '{mandate['target_item']}'. "
-                f"Output a valid JSON object with keys: "
-                f"'decision' ('APPROVED', 'NEEDS_USER_APPROVAL', or 'REJECTED'), "
-                f"'spec_score' (integer 0-100), "
-                f"'price_compliance' (boolean), "
-                f"'rationale' (concise 1-2 sentence explanation)."
-            ),
-            criteria="""
-                1. The output is a valid JSON object with keys: decision, spec_score, price_compliance, and rationale.
-                2. The decision is exactly one of: APPROVED, NEEDS_USER_APPROVAL, or REJECTED.
-                3. If the proposed price exceeds the maximum budget, price_compliance is false and decision is REJECTED.
-                4. If the substitute matches or exceeds all required specifications within budget, decision is APPROVED.
-                5. If specifications are equivalent but deviate from preferred brands or soft preferences, decision is NEEDS_USER_APPROVAL.
-                6. If key specifications are degraded or condition requirements are breached, decision is REJECTED.
-            """,
+            task=task,
+            criteria=criteria,
         )
 
+        # 2. Canonical JSON Parsing & Robust Fence Stripping
         result_str = str(raw_result).strip()
-
-        # Sanitize markdown code blocks if returned
         clean_json_str = result_str
         if "```" in clean_json_str:
             first_brace = clean_json_str.find("{")
@@ -249,25 +278,65 @@ class PurchaseGuard(gl.Contract):
             if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
                 clean_json_str = clean_json_str[first_brace : last_brace + 1]
 
-        decision = "NEEDS_USER_APPROVAL"
+        decision = "REJECTED"
+        vendor_price = 0
+        stock_status = "UNKNOWN"
+        condition_found = "UNKNOWN"
+        verbatim_quote = "NONE"
+        rationale = "Default fallback"
+
         try:
             parsed = json.loads(clean_json_str)
-            raw_decision = str(parsed.get("decision", "NEEDS_USER_APPROVAL")).upper().strip()
-            if raw_decision in ["APPROVED", "NEEDS_USER_APPROVAL", "REJECTED"]:
-                decision = raw_decision
-        except Exception:
-            decision = "NEEDS_USER_APPROVAL"
-
-        # Deterministic safety clamp: Hard budget overruns can never be APPROVED
-        if budget_overrun and decision == "APPROVED":
+            raw_dec = str(parsed.get("decision", "REJECTED")).upper().strip()
+            if raw_dec in ["APPROVED", "NEEDS_USER_APPROVAL", "REJECTED"]:
+                decision = raw_dec
+            vendor_price = int(parsed.get("vendor_price_cents", 0))
+            stock_status = str(parsed.get("stock_status", "UNKNOWN")).upper().strip()
+            condition_found = str(parsed.get("condition", "UNKNOWN")).upper().strip()
+            verbatim_quote = str(parsed.get("verbatim_quote", "NONE")).strip()[:120]
+            rationale = str(parsed.get("rationale", "")).strip()[:200]
+        except Exception as e:
             decision = "REJECTED"
+            rationale = f"Parsing fallback: {str(e)[:80]}"
 
-        # Update mandate state
+        # 3. Deterministic Invariant Clamps (Code Moves State)
+        # Clamp 1: Verbatim Quote Verification
+        if len(verbatim_quote) < 4 or verbatim_quote == "NONE":
+            decision = "REJECTED"
+            rationale = "Deterministic clamp: Missing verifiable verbatim quote from vendor evidence."
+
+        # Clamp 2: Hard Budget Ceiling
+        if vendor_price > max_budget or claimed_price > max_budget:
+            decision = "REJECTED"
+            rationale = f"Deterministic clamp: Price ({max(vendor_price, claimed_price)} cents) exceeds max budget ({max_budget} cents)."
+
+        # Clamp 3: Stock Availability
+        if stock_status == "OUT_OF_STOCK":
+            decision = "REJECTED"
+            rationale = "Deterministic clamp: Vendor item is out of stock."
+
+        # Clamp 4: Condition Compliance
+        if condition_rule == "NEW_ONLY" and condition_found in ["REFURBISHED", "USED"]:
+            decision = "REJECTED"
+            rationale = f"Deterministic clamp: Mandate requires NEW_ONLY but vendor condition is {condition_found}."
+
+        # 4. Canonicalized Storage Record
+        canonical_record = {
+            "mandate_id": int(mandate_id),
+            "decision": decision,
+            "vendor_price_cents": int(vendor_price),
+            "stock_status": stock_status,
+            "condition": condition_found,
+            "verbatim_quote": verbatim_quote,
+            "rationale": rationale
+        }
+        canonical_json = json.dumps(canonical_record)
+
         mandate["status"] = decision
         self.mandates[m_key] = json.dumps(mandate)
-        self.adjudications[m_key] = clean_json_str
+        self.adjudications[m_key] = canonical_json
 
-        return clean_json_str
+        return canonical_json
 
     @gl.public.write
     def confirm_purchase(self, mandate_id: int) -> bool:

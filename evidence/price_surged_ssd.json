@@ -1,0 +1,18 @@
+{
+  "sku": "SAMSUNG-980P-1TB-SURGE",
+  "product_title": "Samsung 980 PRO 1TB PCIe 4.0 NVMe SSD High Performance",
+  "brand": "Samsung",
+  "condition": "NEW",
+  "stock_status": "IN_STOCK",
+  "price_cents": 14999,
+  "currency": "USD",
+  "specifications": {
+    "capacity": "1TB",
+    "form_factor": "M.2 2280",
+    "interface": "PCIe Gen 4.0 x4 NVMe",
+    "sequential_read_speed": "7000 MB/s",
+    "sequential_write_speed": "5000 MB/s",
+    "durability": "600 TBW"
+  },
+  "vendor_verification_seal": "OFFICIAL_SAMSUNG_DISTRIBUTOR_AUTHORIZED"
+}

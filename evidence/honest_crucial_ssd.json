@@ -1,0 +1,18 @@
+{
+  "sku": "CRUCIAL-P5P-1TB",
+  "product_title": "Crucial P5 Plus 1TB PCIe 4.0 3D NAND NVMe M.2 Gaming SSD",
+  "brand": "Crucial",
+  "condition": "NEW",
+  "stock_status": "IN_STOCK",
+  "price_cents": 8999,
+  "currency": "USD",
+  "specifications": {
+    "capacity": "1TB",
+    "form_factor": "M.2 2280",
+    "interface": "PCIe 4.0 x4 NVMe",
+    "sequential_read_speed": "6600 MB/s",
+    "sequential_write_speed": "5000 MB/s",
+    "durability": "600 TBW"
+  },
+  "vendor_verification_seal": "OFFICIAL_CRUCIAL_DIRECT_PARTNER_GENUINE"
+}

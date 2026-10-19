@@ -1,0 +1,18 @@
+{
+  "sku": "BUDGET-SATA-256GB",
+  "product_title": "Generic Low-End SATA III 2.5 Inch Internal Solid State Drive",
+  "brand": "GenericOEM",
+  "condition": "REFURBISHED",
+  "stock_status": "IN_STOCK",
+  "price_cents": 4500,
+  "currency": "USD",
+  "specifications": {
+    "capacity": "256GB",
+    "form_factor": "2.5 Inch",
+    "interface": "SATA III 6Gb/s",
+    "sequential_read_speed": "520 MB/s",
+    "sequential_write_speed": "450 MB/s",
+    "durability": "100 TBW"
+  },
+  "vendor_verification_seal": "THIRD_PARTY_REFURBISHED_CLEARANCE"
+}
