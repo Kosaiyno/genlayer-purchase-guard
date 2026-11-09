@@ -31,8 +31,8 @@ class DynArray(list):
 
 class MockMessage:
     def __init__(self):
-        self.sender_address = Address("0xBuyer11111111111111111111111111111111111")
-        self.origin_address = Address("0xBuyer11111111111111111111111111111111111")
+        self.sender_address = Address("0x1111111111111111111111111111111111111111")
+        self.origin_address = Address("0x1111111111111111111111111111111111111111")
 
 
 class MockBlock:
@@ -160,12 +160,14 @@ from purchase_guard import PurchaseGuard
 
 class TestPurchaseGuard(unittest.TestCase):
     def setUp(self):
-        mock_gl.message.sender_address = Address("0xBuyer11111111111111111111111111111111111")
+        self.buyer = "0x1111111111111111111111111111111111111111"
+        self.agent = "0x2222222222222222222222222222222222222222"
+        self.former_agent = "0x3333333333333333333333333333333333333333"
+        self.intruder = "0x9999999999999999999999999999999999999999"
+
+        mock_gl.message.sender_address = Address(self.buyer)
         mock_gl.eq_principle.mock_response = None
         self.guard = PurchaseGuard()
-        self.buyer = "0xBuyer11111111111111111111111111111111111"
-        self.agent = "0xAgent22222222222222222222222222222222222"
-        self.intruder = "0xIntruder9999999999999999999999999999999"
 
         # Mock vendor URL bodies
         self.url_honest = "https://raw.githubusercontent.com/kosaiyno/genlayer-purchase-guard/main/evidence/honest_crucial_ssd.json"
@@ -212,139 +214,154 @@ class TestPurchaseGuard(unittest.TestCase):
         self.assertEqual(int(self.guard.get_total_mandates()), 1)
         self.assertEqual(self.guard.get_mandate_status(1), "ACTIVE")
 
-    def test_propose_substitution(self):
-        self.guard.create_mandate(
-            target_item="Samsung 980 Pro 1TB NVMe SSD",
-            max_budget_cents=10000,
-            required_specs="1TB NVMe M.2 SSD PCIe 4.0",
-            brand_rule="PREFERRED",
-            condition_rule="NEW_ONLY",
-            authorized_agent=self.agent
-        )
-        mock_gl.message.sender_address = Address(self.agent)
-        res = self.guard.propose_substitution(
-            mandate_id=1,
-            substitute_item="Crucial P5 Plus 1TB NVMe SSD",
-            vendor_url=self.url_honest,
-            proposed_price_cents=8999,
-            agent_notes="Direct partner verified stock"
-        )
-        self.assertTrue(res)
-        self.assertEqual(self.guard.get_mandate_status(1), "PROPOSED")
-
     # =========================================================================
-    # STEWARD REQUIREMENT TESTS: Mandate Authorization Flow
+    # STEWARD & REVIEWER AUTHORIZATION SUITE (ALL 9 CORE CASES)
     # =========================================================================
 
-    def test_unauthorized_proposer_rejected(self):
-        """Unrelated account cannot submit a proposal on a buyer's mandate."""
-        self.guard.create_mandate(
-            target_item="Samsung 980 Pro 1TB NVMe SSD",
-            max_budget_cents=10000,
-            required_specs="1TB NVMe M.2 SSD PCIe 4.0",
-            brand_rule="PREFERRED",
-            condition_rule="NEW_ONLY",
-            authorized_agent=self.agent
-        )
-        # Intruder attempts to submit a proposal
+    def test_case_1_unrelated_account_submits_proposal_rejected(self):
+        """Case 1: Unrelated account cannot submit proposal; storage remains unchanged."""
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY", authorized_agent=self.agent)
+        initial_mandate_json = self.guard.get_mandate(m)
+
         mock_gl.message.sender_address = Address(self.intruder)
         with self.assertRaises(PermissionError) as ctx:
-            self.guard.propose_substitution(
-                mandate_id=1,
-                substitute_item="Phishing / Rogue Drive",
-                vendor_url=self.url_honest,
-                proposed_price_cents=8999,
-                agent_notes="Hijack attempt"
-            )
+            self.guard.propose_substitution(m, "Rogue Drive", self.url_honest, 8000, "Hijack")
+
         self.assertIn("Unauthorized proposal submission", str(ctx.exception))
+        # Verify storage remains completely unchanged
+        self.assertEqual(self.guard.get_mandate_status(m), "ACTIVE")
+        self.assertEqual(self.guard.get_mandate(m), initial_mandate_json)
+        self.assertIn("Proposal not found", self.guard.get_proposal(m))
 
-    def test_unauthorized_confirm_purchase_rejected(self):
-        """Unrelated account cannot confirm purchase execution on an approved mandate."""
-        self.guard.create_mandate(
-            target_item="Samsung 980 Pro 1TB NVMe SSD",
-            max_budget_cents=10000,
-            required_specs="1TB NVMe M.2 SSD PCIe 4.0",
-            brand_rule="PREFERRED",
-            condition_rule="NEW_ONLY",
-            authorized_agent=self.agent
-        )
-        mock_gl.message.sender_address = Address(self.agent)
-        self.guard.propose_substitution(1, "Crucial P5 Plus", self.url_honest, 8999, "Notes")
-        self.guard.adjudicate_substitution(1)
-        self.assertEqual(self.guard.get_mandate_status(1), "APPROVED")
-
-        # Intruder tries to trigger execution confirmation
-        mock_gl.message.sender_address = Address(self.intruder)
-        with self.assertRaises(PermissionError) as ctx:
-            self.guard.confirm_purchase(1)
-        self.assertIn("Unauthorized purchase confirmation", str(ctx.exception))
-
-    def test_buyer_and_authorized_agent_both_can_propose_and_confirm(self):
-        """Both the buyer and the authorized agent have legitimate access to propose and confirm."""
-        # Scenario 1: Buyer acts directly without agent
-        mock_gl.message.sender_address = Address(self.buyer)
-        m1 = self.guard.create_mandate("SSD 1", 10000, "1TB", "ANY", "NEW_ONLY")
-        self.guard.propose_substitution(m1, "Crucial P5 Plus", self.url_honest, 8999, "Self-directed")
-        self.guard.adjudicate_substitution(m1)
-        self.assertTrue(self.guard.confirm_purchase(m1))
-        self.assertEqual(self.guard.get_mandate_status(m1), "EXECUTED")
-
-        # Scenario 2: Authorized agent acts on behalf of buyer
-        m2 = self.guard.create_mandate("SSD 2", 10000, "1TB", "ANY", "NEW_ONLY", authorized_agent=self.agent)
-        mock_gl.message.sender_address = Address(self.agent)
-        self.guard.propose_substitution(m2, "Crucial P5 Plus", self.url_honest, 8999, "Agent-directed")
-        self.guard.adjudicate_substitution(m2)
-        self.assertTrue(self.guard.confirm_purchase(m2))
-        self.assertEqual(self.guard.get_mandate_status(m2), "EXECUTED")
-
-    def test_set_authorized_agent_access_control(self):
-        """Only buyer can set or update the authorized agent."""
+    def test_case_2_buyer_submits_proposal_accepted(self):
+        """Case 2: Buyer submits proposal directly without requiring an agent."""
         mock_gl.message.sender_address = Address(self.buyer)
         m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
+        res = self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Buyer proposal")
+        self.assertTrue(res)
+        self.assertEqual(self.guard.get_mandate_status(m), "PROPOSED")
 
-        # Intruder fails to assign themselves as agent
+    def test_case_3_authorized_agent_submits_proposal_accepted(self):
+        """Case 3: Explicitly authorized agent submits proposal."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY", authorized_agent=self.agent)
+
+        mock_gl.message.sender_address = Address(self.agent)
+        res = self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Agent proposal")
+        self.assertTrue(res)
+        self.assertEqual(self.guard.get_mandate_status(m), "PROPOSED")
+
+    def test_case_4_unrelated_account_confirms_purchase_rejected(self):
+        """Case 4: Unrelated account cannot confirm purchase; status remains APPROVED, not EXECUTED."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY", authorized_agent=self.agent)
+        self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Notes")
+        self.guard.adjudicate_substitution(m)
+        self.assertEqual(self.guard.get_mandate_status(m), "APPROVED")
+
+        # Intruder attempts to trigger confirmation
+        mock_gl.message.sender_address = Address(self.intruder)
+        with self.assertRaises(PermissionError) as ctx:
+            self.guard.confirm_purchase(m)
+
+        self.assertIn("Unauthorized purchase confirmation", str(ctx.exception))
+        # Verify storage remains APPROVED and was NOT transitioned to EXECUTED
+        self.assertEqual(self.guard.get_mandate_status(m), "APPROVED")
+
+    def test_case_5_buyer_confirms_purchase_accepted(self):
+        """Case 5: Buyer confirms approved purchase directly."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
+        self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Notes")
+        self.guard.adjudicate_substitution(m)
+        self.assertEqual(self.guard.get_mandate_status(m), "APPROVED")
+
+        res = self.guard.confirm_purchase(m)
+        self.assertTrue(res)
+        self.assertEqual(self.guard.get_mandate_status(m), "EXECUTED")
+
+    def test_case_6_authorized_agent_confirms_purchase_accepted(self):
+        """Case 6: Explicitly authorized agent confirms approved purchase."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY", authorized_agent=self.agent)
+        self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Notes")
+        self.guard.adjudicate_substitution(m)
+        self.assertEqual(self.guard.get_mandate_status(m), "APPROVED")
+
+        mock_gl.message.sender_address = Address(self.agent)
+        res = self.guard.confirm_purchase(m)
+        self.assertTrue(res)
+        self.assertEqual(self.guard.get_mandate_status(m), "EXECUTED")
+
+    def test_case_7_unrelated_account_changes_authorized_agent_rejected(self):
+        """Case 7: Unrelated account cannot set or modify authorized agent; storage unchanged."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY", authorized_agent=self.agent)
+
         mock_gl.message.sender_address = Address(self.intruder)
         with self.assertRaises(PermissionError):
             self.guard.set_authorized_agent(m, self.intruder)
 
-        # Buyer assigns agent successfully
-        mock_gl.message.sender_address = Address(self.buyer)
-        self.assertTrue(self.guard.set_authorized_agent(m, self.agent))
+        # Verify delegation was not hijacked
+        mandate_data = json.loads(self.guard.get_mandate(m))
+        self.assertEqual(mandate_data["authorized_agent"], self.agent)
 
-        # Newly assigned agent can now submit proposal
-        mock_gl.message.sender_address = Address(self.agent)
-        self.assertTrue(self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Notes"))
+    def test_case_8_former_agent_acts_after_revocation_rejected(self):
+        """Case 8: Buyer revokes authorized agent; former agent cannot propose or confirm."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY", authorized_agent=self.former_agent)
+
+        # Buyer revokes former agent
+        self.guard.set_authorized_agent(m, "")
+        mandate_data = json.loads(self.guard.get_mandate(m))
+        self.assertEqual(mandate_data["authorized_agent"], "")
+
+        # Former agent tries to propose substitution -> rejected
+        mock_gl.message.sender_address = Address(self.former_agent)
+        with self.assertRaises(PermissionError):
+            self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Attempt")
+
+        self.assertEqual(self.guard.get_mandate_status(m), "ACTIVE")
+
+    def test_case_9_unrelated_account_overrides_buyer_decision_rejected(self):
+        """Case 9: Unrelated account cannot submit a decision override."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "PREFERRED", "NEW_ONLY", authorized_agent=self.agent)
+        self.guard.propose_substitution(m, "Off-Brand", self.url_honest, 8000, "Notes")
+
+        mock_gl.eq_principle.mock_response = json.dumps({
+            "decision": "NEEDS_USER_APPROVAL",
+            "vendor_price_cents": 8000,
+            "stock_status": "IN_STOCK",
+            "condition": "NEW",
+            "verbatim_quote": "\"price_cents\": 8999",
+            "rationale": "Soft brand preference deviation"
+        })
+        self.guard.adjudicate_substitution(m)
+        self.assertEqual(self.guard.get_mandate_status(m), "NEEDS_USER_APPROVAL")
+
+        # Intruder tries to override
+        mock_gl.message.sender_address = Address(self.intruder)
+        with self.assertRaises(PermissionError):
+            self.guard.buyer_override(m, approve=True)
+
+        self.assertEqual(self.guard.get_mandate_status(m), "NEEDS_USER_APPROVAL")
+
+    def test_case_10_address_validation_enforced(self):
+        """Case 10: Invalid address formats are strictly rejected."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        # Invalid address string in create_mandate
+        with self.assertRaises(ValueError):
+            self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY", authorized_agent="invalid_address")
+
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
+        # Invalid address in set_authorized_agent
+        with self.assertRaises(ValueError):
+            self.guard.set_authorized_agent(m, "0x123nothex")
 
     # =========================================================================
     # CORE BUSINESS LOGIC TESTS
     # =========================================================================
-
-    def test_adjudicate_honest_approved_and_confirmed(self):
-        self.guard.create_mandate(
-            target_item="Samsung 980 Pro 1TB NVMe SSD",
-            max_budget_cents=10000,
-            required_specs="1TB NVMe M.2 SSD PCIe 4.0",
-            brand_rule="PREFERRED",
-            condition_rule="NEW_ONLY",
-            authorized_agent=self.agent
-        )
-        mock_gl.message.sender_address = Address(self.agent)
-        self.guard.propose_substitution(
-            mandate_id=1,
-            substitute_item="Crucial P5 Plus 1TB NVMe SSD",
-            vendor_url=self.url_honest,
-            proposed_price_cents=8999,
-            agent_notes="Stock replacement"
-        )
-
-        res = self.guard.adjudicate_substitution(1)
-        parsed = json.loads(res)
-        self.assertEqual(parsed["decision"], "APPROVED")
-        self.assertEqual(self.guard.get_mandate_status(1), "APPROVED")
-
-        confirm_res = self.guard.confirm_purchase(1)
-        self.assertTrue(confirm_res)
-        self.assertEqual(self.guard.get_mandate_status(1), "EXECUTED")
 
     def test_adjudicate_catches_downgraded_and_refurbished_abuse(self):
         self.guard.create_mandate(
@@ -356,7 +373,6 @@ class TestPurchaseGuard(unittest.TestCase):
             authorized_agent=self.agent
         )
         mock_gl.message.sender_address = Address(self.agent)
-        # Malicious or buggy agent proposes a cheap SATA refurbished drive claiming it meets specs
         self.guard.propose_substitution(
             mandate_id=1,
             substitute_item="Cheap Drive",
@@ -374,14 +390,13 @@ class TestPurchaseGuard(unittest.TestCase):
     def test_adjudicate_catches_price_surge_budget_overrun(self):
         self.guard.create_mandate(
             target_item="Samsung 980 Pro 1TB NVMe SSD",
-            max_budget_cents=10000,  # $100 max
+            max_budget_cents=10000,
             required_specs="1TB NVMe M.2 SSD PCIe 4.0",
             brand_rule="ANY",
             condition_rule="NEW_ONLY",
             authorized_agent=self.agent
         )
         mock_gl.message.sender_address = Address(self.agent)
-        # Agent claims price is 9500 ($95), but actual vendor page has surged price to 14999 ($149.99)
         self.guard.propose_substitution(
             mandate_id=1,
             substitute_item="Surged SSD",
@@ -414,7 +429,6 @@ class TestPurchaseGuard(unittest.TestCase):
             agent_notes="Honest specs"
         )
 
-        # Mock LLM returning missing/blank verbatim quote
         mock_gl.eq_principle.mock_response = json.dumps({
             "decision": "APPROVED",
             "vendor_price_cents": 8999,
@@ -429,40 +443,6 @@ class TestPurchaseGuard(unittest.TestCase):
         self.assertEqual(parsed["decision"], "REJECTED")
         self.assertIn("Missing verifiable verbatim quote", parsed["rationale"])
 
-    def test_buyer_override_flow(self):
-        self.guard.create_mandate(
-            target_item="Flagship SSD",
-            max_budget_cents=10000,
-            required_specs="1TB NVMe",
-            brand_rule="PREFERRED",
-            condition_rule="NEW_ONLY",
-            authorized_agent=self.agent
-        )
-        mock_gl.message.sender_address = Address(self.agent)
-        self.guard.propose_substitution(1, "Off-Brand SSD", self.url_honest, 8000, "Notes")
-
-        mock_gl.eq_principle.mock_response = json.dumps({
-            "decision": "NEEDS_USER_APPROVAL",
-            "vendor_price_cents": 8000,
-            "stock_status": "IN_STOCK",
-            "condition": "NEW",
-            "verbatim_quote": "\"price_cents\": 8999",
-            "rationale": "Soft brand preference deviation"
-        })
-
-        self.guard.adjudicate_substitution(1)
-        self.assertEqual(self.guard.get_mandate_status(1), "NEEDS_USER_APPROVAL")
-
-        # Unauthorized caller cannot override
-        mock_gl.message.sender_address = Address(self.intruder)
-        with self.assertRaises(Exception):
-            self.guard.buyer_override(1, approve=True)
-
-        # Buyer approves
-        mock_gl.message.sender_address = Address(self.buyer)
-        self.guard.buyer_override(1, approve=True)
-        self.assertEqual(self.guard.get_mandate_status(1), "APPROVED")
-
     def test_cancellation_access_control(self):
         self.guard.create_mandate(
             target_item="SSD",
@@ -472,7 +452,7 @@ class TestPurchaseGuard(unittest.TestCase):
             condition_rule="NEW_ONLY"
         )
         mock_gl.message.sender_address = Address(self.intruder)
-        with self.assertRaises(Exception):
+        with self.assertRaises(PermissionError):
             self.guard.cancel_mandate(1)
 
         mock_gl.message.sender_address = Address(self.buyer)

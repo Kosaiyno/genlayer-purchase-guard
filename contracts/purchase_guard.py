@@ -2,6 +2,16 @@
 from genlayer import *
 import json
 
+def _validate_address(addr_str: str) -> str:
+    """Validates that a non-empty string is a valid 20-byte hex address. Empty string allowed to revoke delegation."""
+    s = str(addr_str).strip()
+    if not s:
+        return ""
+    clean_hex = s[2:] if s.startswith("0x") or s.startswith("0X") else s
+    if len(clean_hex) != 40 or not all(c in "0123456789abcdefABCDEF" for c in clean_hex):
+        raise ValueError(f"Invalid address format: '{addr_str}'. Must be a valid 20-byte hex address (0x...) or empty string to revoke.")
+    return f"0x{clean_hex.lower()}"
+
 class PurchaseGuard(gl.Contract):
     """
     PurchaseGuard: Autonomous On-Chain Procurement Firewall & Policy Arbiter.
@@ -92,7 +102,7 @@ class PurchaseGuard(gl.Contract):
         clean_specs = str(required_specs).strip()
         clean_brand = str(brand_rule).upper().strip()
         clean_cond = str(condition_rule).upper().strip()
-        clean_agent = str(authorized_agent).strip()
+        clean_agent = _validate_address(authorized_agent)
 
         if len(clean_target) == 0:
             raise ValueError("Target item name cannot be empty")
@@ -147,7 +157,8 @@ class PurchaseGuard(gl.Contract):
         if caller_str != buyer_str:
             raise PermissionError("Unauthorized: Only the original mandate buyer can set or update the authorized agent")
 
-        mandate["authorized_agent"] = str(agent_address).strip()
+        clean_agent = _validate_address(agent_address)
+        mandate["authorized_agent"] = clean_agent
         self.mandates[m_key] = json.dumps(mandate)
         return True
 
