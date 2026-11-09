@@ -3,7 +3,7 @@
 > **GenLayer Builder Track**: Intelligent Contracts  
 > **Network**: GenLayer StudioNet (Chain ID: `61999`)  
 > **Runtime**: `py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6`  
-> **Deployed Contract (StudioNet)**: [`0x2A835e048362A8A38bD4F4Ef0d4b83F96D2c410a`](https://explorer-studio.genlayer.com/address/0x2A835e048362A8A38bD4F4Ef0d4b83F96D2c410a)
+> **Deployed Contract (StudioNet)**: [`0xcAE465B951A1509a8f06D35B2353951abCDFe981`](https://explorer-studio.genlayer.com/address/0xcAE465B951A1509a8f06D35B2353951abCDFe981)
 
 An autonomous on-chain procurement firewall and policy escrow primitive built on GenLayer. `PurchaseGuard` protects corporate procurement and autonomous shopping agents from hallucinations, hidden price surges, counterfeit goods, and deceptive product substitutions.
 
