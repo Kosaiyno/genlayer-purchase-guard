@@ -232,6 +232,13 @@ class PurchaseGuard(gl.Contract):
         2. Validators extract material product facts (price, stock, condition, specs) and verbatim quotes.
         3. Deterministic safety clamps verify verbatim quotes, budget ceilings, condition rules, and stock status.
         4. Canonicalized adjudication record stored on-chain.
+
+        PERMISSIONLESS EVALUATION DESIGN NOTE:
+        Adjudication may be triggered by any caller/keeper once a proposal is submitted.
+        This evaluates the immutable proposal already stored on-chain against vendor evidence.
+        It does not permit an unrelated account to alter the proposal, nor can an unrelated caller
+        confirm purchase execution. Final purchase confirmation remains strictly gated to the
+        buyer or explicitly authorized agent via confirm_purchase().
         """
         m_key = u256(mandate_id)
         if m_key not in self.mandates:
@@ -398,6 +405,11 @@ class PurchaseGuard(gl.Contract):
         MANDATE AUTHORIZATION:
         Restricted to the buyer or an explicitly authorized agent. Unrelated accounts
         are strictly prohibited from triggering confirmation.
+
+        NOTE ON EXECUTION SCOPE:
+        confirm_purchase() records the mandate status as EXECUTED on-chain; it serves as a
+        verifiable certification gate for downstream settlement systems and does not itself
+        hold or transfer treasury funds directly.
         """
         m_key = u256(mandate_id)
         if m_key not in self.mandates:
