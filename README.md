@@ -61,26 +61,30 @@ Full transaction parameters and read-back states are documented in [`deploy/proo
 
 ---
 
-## 3. Four Deterministic Safety Clamps
+## 3. Five Deterministic Safety Clamps & Authorization Controls
 
-1. **Independent Evidence Acquisition**: Contract fetches evidence directly using `gl.nondet.web.get()`. Never relies on caller-supplied specification parameters.
-2. **Mandatory Verbatim Quoting**: AI validators must extract an exact substring from the fetched payload. If missing, contract clamps to `REJECTED`.
-3. **Hard Budget Ceiling**: If vendor price exceeds `max_budget_cents`, contract forcefully clamps to `REJECTED`.
-4. **Condition & Stock Invariants**: If the vendor payload shows `REFURBISHED` on a `NEW_ONLY` mandate or `OUT_OF_STOCK`, contract forcefully clamps to `REJECTED`.
+1. **Mandate Authorization Control (Anti-Takeover)**: `propose_substitution` and `confirm_purchase` are strictly restricted to the original buyer or an explicitly authorized agent (`authorized_agent`). Unrelated third-party callers cannot take over mandates or confirm execution.
+2. **Independent Evidence Acquisition**: Contract fetches evidence directly using `gl.nondet.web.get()`. Never relies on caller-supplied specification parameters.
+3. **Mandatory Verbatim Quoting**: AI validators must extract an exact substring from the fetched payload. If missing, contract clamps to `REJECTED`.
+4. **Hard Budget Ceiling**: If vendor price exceeds `max_budget_cents`, contract forcefully clamps to `REJECTED`.
+5. **Condition & Stock Invariants**: If the vendor payload shows `REFURBISHED` on a `NEW_ONLY` mandate or `OUT_OF_STOCK`, contract forcefully clamps to `REJECTED`.
 
 ---
 
-## 4. Local Testing & Verification
+## 4. Local Testing & Verification (13/13 Passing)
 
 ```bash
-uv run python -m unittest discover -s tests
+python -m unittest discover -s tests -v
 ```
 
-Output:
+Includes dedicated tests verifying that unauthorized callers are rejected:
+- `test_unauthorized_proposer_rejected`: Unauthorized caller attempting `propose_substitution` is rejected with `PermissionError`.
+- `test_unauthorized_confirm_purchase_rejected`: Unauthorized caller attempting `confirm_purchase` is rejected with `PermissionError`.
+- `test_set_authorized_agent_access_control`: Only the buyer can set or update the delegated agent.
+- `test_buyer_and_authorized_agent_both_can_propose_and_confirm`: Validates authorized flow for both buyer and delegated agent.
+
 ```
-.........
-----------------------------------------------------------------------
-Ran 9 tests in 0.001s
+Ran 13 tests in 0.001s
 
 OK
 ```

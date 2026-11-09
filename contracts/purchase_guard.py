@@ -7,10 +7,11 @@ class PurchaseGuard(gl.Contract):
     PurchaseGuard: Autonomous On-Chain Procurement Firewall & Policy Arbiter.
     
     Protects buyers and autonomous shopping agents against:
-    1. Unverified caller claims (contract independently acquires vendor evidence via gl.nondet.web.get).
-    2. Hidden price surges & budget overruns (deterministic clamp against max_budget_cents).
-    3. Counterfeit / downgraded specifications & refurbished goods (Equivalence Principle consensus with verbatim quote grounding).
-    4. Out-of-stock ghost listings (independent vendor availability verification).
+    1. Unrelated account takeover (strict authorization: only buyer or delegated agent can propose or confirm execution).
+    2. Unverified caller claims (contract independently acquires vendor evidence via gl.nondet.web.get).
+    3. Hidden price surges & budget overruns (deterministic clamp against max_budget_cents).
+    4. Counterfeit / downgraded specifications & refurbished goods (Equivalence Principle consensus with verbatim quote grounding).
+    5. Out-of-stock ghost listings (independent vendor availability verification).
     """
     owner: Address
     mandate_counter: u256
@@ -80,12 +81,18 @@ class PurchaseGuard(gl.Contract):
         max_budget_cents: int,
         required_specs: str,
         brand_rule: str,
-        condition_rule: str
+        condition_rule: str,
+        authorized_agent: str = ""
     ) -> u256:
+        """
+        Creates an immutable purchase mandate bound to the buyer (caller).
+        Optionally specifies an authorized_agent address delegated to submit proposals and confirm purchases.
+        """
         clean_target = str(target_item).strip()
         clean_specs = str(required_specs).strip()
         clean_brand = str(brand_rule).upper().strip()
         clean_cond = str(condition_rule).upper().strip()
+        clean_agent = str(authorized_agent).strip()
 
         if len(clean_target) == 0:
             raise ValueError("Target item name cannot be empty")
@@ -110,6 +117,7 @@ class PurchaseGuard(gl.Contract):
         mandate_record = {
             "mandate_id": int(new_id),
             "buyer": str(gl.message.sender_address),
+            "authorized_agent": clean_agent,
             "target_item": clean_target,
             "max_budget_cents": int(max_budget_cents),
             "required_specs": clean_specs,
@@ -123,6 +131,27 @@ class PurchaseGuard(gl.Contract):
         return new_id
 
     @gl.public.write
+    def set_authorized_agent(self, mandate_id: int, agent_address: str) -> bool:
+        """
+        Allows the buyer to explicitly authorize or update a delegated procurement agent.
+        Only callable by the original mandate buyer.
+        """
+        m_key = u256(mandate_id)
+        if m_key not in self.mandates:
+            raise ValueError(f"Mandate {mandate_id} does not exist")
+
+        mandate = json.loads(self.mandates[m_key])
+        caller_str = str(gl.message.sender_address).lower()
+        buyer_str = str(mandate.get("buyer", "")).lower()
+
+        if caller_str != buyer_str:
+            raise PermissionError("Unauthorized: Only the original mandate buyer can set or update the authorized agent")
+
+        mandate["authorized_agent"] = str(agent_address).strip()
+        self.mandates[m_key] = json.dumps(mandate)
+        return True
+
+    @gl.public.write
     def propose_substitution(
         self,
         mandate_id: int,
@@ -132,11 +161,11 @@ class PurchaseGuard(gl.Contract):
         agent_notes: str
     ) -> bool:
         """
-        Agent submits a substitution proposal.
-        The contract records the vendor evidence URL.
-        Crucially: The contract does NOT blindly trust the agent's claims;
-        material facts (price, specs, availability, condition) are fetched and validated
-        directly from vendor_url during adjudication.
+        Submits a substitution proposal for a buyer's mandate.
+        
+        MANDATE AUTHORIZATION:
+        Restricted to the buyer or an explicitly authorized agent. Unrelated accounts
+        are strictly prohibited from taking over or submitting proposals on another account's mandate.
         """
         m_key = u256(mandate_id)
         if m_key not in self.mandates:
@@ -146,6 +175,18 @@ class PurchaseGuard(gl.Contract):
         current_status = mandate.get("status", "")
         if current_status not in ["ACTIVE", "REJECTED"]:
             raise ValueError(f"Cannot submit proposal for mandate in status '{current_status}'")
+
+        # Authorization Enforcement: Caller must be buyer or authorized_agent
+        caller = str(gl.message.sender_address).lower()
+        buyer = str(mandate.get("buyer", "")).lower()
+        agent = str(mandate.get("authorized_agent", "")).lower()
+
+        is_buyer = (caller == buyer)
+        is_agent = (bool(agent) and caller == agent)
+        if not (is_buyer or is_agent):
+            raise PermissionError(
+                f"Unauthorized proposal submission: caller {gl.message.sender_address} is neither the mandate buyer nor an authorized agent"
+            )
 
         clean_sub = str(substitute_item).strip()
         clean_url = str(vendor_url).strip()
@@ -340,6 +381,13 @@ class PurchaseGuard(gl.Contract):
 
     @gl.public.write
     def confirm_purchase(self, mandate_id: int) -> bool:
+        """
+        Executes purchase confirmation for an APPROVED mandate.
+        
+        MANDATE AUTHORIZATION:
+        Restricted to the buyer or an explicitly authorized agent. Unrelated accounts
+        are strictly prohibited from triggering confirmation.
+        """
         m_key = u256(mandate_id)
         if m_key not in self.mandates:
             raise ValueError(f"Mandate {mandate_id} does not exist")
@@ -348,20 +396,38 @@ class PurchaseGuard(gl.Contract):
         if mandate.get("status") != "APPROVED":
             raise ValueError(f"Cannot confirm purchase: mandate status is '{mandate.get('status')}', must be 'APPROVED'")
 
+        # Authorization Enforcement: Caller must be buyer or authorized_agent
+        caller = str(gl.message.sender_address).lower()
+        buyer = str(mandate.get("buyer", "")).lower()
+        agent = str(mandate.get("authorized_agent", "")).lower()
+
+        is_buyer = (caller == buyer)
+        is_agent = (bool(agent) and caller == agent)
+        if not (is_buyer or is_agent):
+            raise PermissionError(
+                f"Unauthorized purchase confirmation: caller {gl.message.sender_address} is neither the mandate buyer nor an authorized agent"
+            )
+
         mandate["status"] = "EXECUTED"
         self.mandates[m_key] = json.dumps(mandate)
         return True
 
     @gl.public.write
     def buyer_override(self, mandate_id: int, approve: bool) -> bool:
+        """
+        Allows the buyer to override a NEEDS_USER_APPROVAL decision to APPROVED or REJECTED.
+        Strictly restricted to the original buyer.
+        """
         m_key = u256(mandate_id)
         if m_key not in self.mandates:
             raise ValueError(f"Mandate {mandate_id} does not exist")
 
         mandate = json.loads(self.mandates[m_key])
-        caller_str = str(gl.message.sender_address)
-        if caller_str != mandate.get("buyer"):
-            raise Exception("Unauthorized: Only the original mandate buyer can submit a decision override")
+        caller_str = str(gl.message.sender_address).lower()
+        buyer_str = str(mandate.get("buyer", "")).lower()
+
+        if caller_str != buyer_str:
+            raise PermissionError("Unauthorized: Only the original mandate buyer can submit a decision override")
 
         if mandate.get("status") != "NEEDS_USER_APPROVAL":
             raise ValueError(f"Cannot override mandate in status '{mandate.get('status')}', must be 'NEEDS_USER_APPROVAL'")
@@ -372,14 +438,21 @@ class PurchaseGuard(gl.Contract):
 
     @gl.public.write
     def cancel_mandate(self, mandate_id: int) -> bool:
+        """
+        Cancels an active or pending mandate.
+        Callable only by the buyer or the contract owner.
+        """
         m_key = u256(mandate_id)
         if m_key not in self.mandates:
             raise ValueError(f"Mandate {mandate_id} does not exist")
 
         mandate = json.loads(self.mandates[m_key])
-        caller_str = str(gl.message.sender_address)
-        if caller_str != mandate.get("buyer") and caller_str != str(self.owner):
-            raise Exception("Unauthorized: Only the buyer or contract owner can cancel a mandate")
+        caller_str = str(gl.message.sender_address).lower()
+        buyer_str = str(mandate.get("buyer", "")).lower()
+        owner_str = str(self.owner).lower()
+
+        if caller_str != buyer_str and caller_str != owner_str:
+            raise PermissionError("Unauthorized: Only the buyer or contract owner can cancel a mandate")
 
         if mandate.get("status") == "EXECUTED":
             raise ValueError("Cannot cancel an already EXECUTED purchase mandate")

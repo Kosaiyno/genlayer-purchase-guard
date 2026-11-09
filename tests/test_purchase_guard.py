@@ -2,7 +2,7 @@
 Unit tests for PurchaseGuard Intelligent Contract.
 Mocks the GenLayer runtime environment (gl, TreeMap, u256, Address, gl.nondet.web.get)
 to verify all contract state transitions, independent vendor evidence acquisition,
-verbatim quote validation, and deterministic safety clamps.
+verbatim quote validation, deterministic safety clamps, and mandate authorization controls.
 """
 
 import sys
@@ -102,18 +102,26 @@ class MockEqPrinciple:
                 "vendor_price_cents": 8999,
                 "stock_status": "IN_STOCK",
                 "condition": "NEW",
-                "verbatim_quote": "\"product_title\": \"Crucial P5 Plus 1TB PCIe 4.0 3D NAND NVMe M.2 Gaming SSD\"",
-                "rationale": "Meets all NVMe speed, capacity, and brand requirements within budget."
+                "verbatim_quote": "\"price_cents\": 8999",
+                "rationale": "Product satisfies PCIe 4.0 NVMe specifications within budget."
             })
         else:
             return json.dumps({
                 "decision": "APPROVED",
-                "vendor_price_cents": 8500,
+                "vendor_price_cents": 8999,
                 "stock_status": "IN_STOCK",
                 "condition": "NEW",
-                "verbatim_quote": "\"condition\": \"NEW\"",
-                "rationale": "Acceptable functional equivalent."
+                "verbatim_quote": "\"price_cents\": 8999",
+                "rationale": "Satisfies specs."
             })
+
+
+class MockPublic:
+    def view(self, fn):
+        return fn
+
+    def write(self, fn):
+        return fn
 
 
 class MockContract:
@@ -126,27 +134,16 @@ class MockContract:
         return obj
 
 
-class MockPublic:
-    @staticmethod
-    def view(f):
-        return f
-
-    @staticmethod
-    def write(f):
-        return f
-
-
 class MockGLModule:
     def __init__(self):
-        self.Contract = MockContract
         self.message = MockMessage()
         self.block = MockBlock()
         self.nondet = MockNondet()
         self.eq_principle = MockEqPrinciple()
         self.public = MockPublic()
+        self.Contract = MockContract
 
 
-# Register mocks in sys.modules
 mock_gl = MockGLModule()
 genlayer_mock = type(sys)("genlayer")
 genlayer_mock.gl = mock_gl
@@ -208,7 +205,8 @@ class TestPurchaseGuard(unittest.TestCase):
             max_budget_cents=10000,
             required_specs="1TB NVMe M.2 SSD PCIe 4.0 read >= 7000MB/s",
             brand_rule="PREFERRED",
-            condition_rule="NEW_ONLY"
+            condition_rule="NEW_ONLY",
+            authorized_agent=self.agent
         )
         self.assertEqual(int(mandate_id), 1)
         self.assertEqual(int(self.guard.get_total_mandates()), 1)
@@ -220,7 +218,8 @@ class TestPurchaseGuard(unittest.TestCase):
             max_budget_cents=10000,
             required_specs="1TB NVMe M.2 SSD PCIe 4.0",
             brand_rule="PREFERRED",
-            condition_rule="NEW_ONLY"
+            condition_rule="NEW_ONLY",
+            authorized_agent=self.agent
         )
         mock_gl.message.sender_address = Address(self.agent)
         res = self.guard.propose_substitution(
@@ -233,13 +232,101 @@ class TestPurchaseGuard(unittest.TestCase):
         self.assertTrue(res)
         self.assertEqual(self.guard.get_mandate_status(1), "PROPOSED")
 
+    # =========================================================================
+    # STEWARD REQUIREMENT TESTS: Mandate Authorization Flow
+    # =========================================================================
+
+    def test_unauthorized_proposer_rejected(self):
+        """Unrelated account cannot submit a proposal on a buyer's mandate."""
+        self.guard.create_mandate(
+            target_item="Samsung 980 Pro 1TB NVMe SSD",
+            max_budget_cents=10000,
+            required_specs="1TB NVMe M.2 SSD PCIe 4.0",
+            brand_rule="PREFERRED",
+            condition_rule="NEW_ONLY",
+            authorized_agent=self.agent
+        )
+        # Intruder attempts to submit a proposal
+        mock_gl.message.sender_address = Address(self.intruder)
+        with self.assertRaises(PermissionError) as ctx:
+            self.guard.propose_substitution(
+                mandate_id=1,
+                substitute_item="Phishing / Rogue Drive",
+                vendor_url=self.url_honest,
+                proposed_price_cents=8999,
+                agent_notes="Hijack attempt"
+            )
+        self.assertIn("Unauthorized proposal submission", str(ctx.exception))
+
+    def test_unauthorized_confirm_purchase_rejected(self):
+        """Unrelated account cannot confirm purchase execution on an approved mandate."""
+        self.guard.create_mandate(
+            target_item="Samsung 980 Pro 1TB NVMe SSD",
+            max_budget_cents=10000,
+            required_specs="1TB NVMe M.2 SSD PCIe 4.0",
+            brand_rule="PREFERRED",
+            condition_rule="NEW_ONLY",
+            authorized_agent=self.agent
+        )
+        mock_gl.message.sender_address = Address(self.agent)
+        self.guard.propose_substitution(1, "Crucial P5 Plus", self.url_honest, 8999, "Notes")
+        self.guard.adjudicate_substitution(1)
+        self.assertEqual(self.guard.get_mandate_status(1), "APPROVED")
+
+        # Intruder tries to trigger execution confirmation
+        mock_gl.message.sender_address = Address(self.intruder)
+        with self.assertRaises(PermissionError) as ctx:
+            self.guard.confirm_purchase(1)
+        self.assertIn("Unauthorized purchase confirmation", str(ctx.exception))
+
+    def test_buyer_and_authorized_agent_both_can_propose_and_confirm(self):
+        """Both the buyer and the authorized agent have legitimate access to propose and confirm."""
+        # Scenario 1: Buyer acts directly without agent
+        mock_gl.message.sender_address = Address(self.buyer)
+        m1 = self.guard.create_mandate("SSD 1", 10000, "1TB", "ANY", "NEW_ONLY")
+        self.guard.propose_substitution(m1, "Crucial P5 Plus", self.url_honest, 8999, "Self-directed")
+        self.guard.adjudicate_substitution(m1)
+        self.assertTrue(self.guard.confirm_purchase(m1))
+        self.assertEqual(self.guard.get_mandate_status(m1), "EXECUTED")
+
+        # Scenario 2: Authorized agent acts on behalf of buyer
+        m2 = self.guard.create_mandate("SSD 2", 10000, "1TB", "ANY", "NEW_ONLY", authorized_agent=self.agent)
+        mock_gl.message.sender_address = Address(self.agent)
+        self.guard.propose_substitution(m2, "Crucial P5 Plus", self.url_honest, 8999, "Agent-directed")
+        self.guard.adjudicate_substitution(m2)
+        self.assertTrue(self.guard.confirm_purchase(m2))
+        self.assertEqual(self.guard.get_mandate_status(m2), "EXECUTED")
+
+    def test_set_authorized_agent_access_control(self):
+        """Only buyer can set or update the authorized agent."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
+
+        # Intruder fails to assign themselves as agent
+        mock_gl.message.sender_address = Address(self.intruder)
+        with self.assertRaises(PermissionError):
+            self.guard.set_authorized_agent(m, self.intruder)
+
+        # Buyer assigns agent successfully
+        mock_gl.message.sender_address = Address(self.buyer)
+        self.assertTrue(self.guard.set_authorized_agent(m, self.agent))
+
+        # Newly assigned agent can now submit proposal
+        mock_gl.message.sender_address = Address(self.agent)
+        self.assertTrue(self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Notes"))
+
+    # =========================================================================
+    # CORE BUSINESS LOGIC TESTS
+    # =========================================================================
+
     def test_adjudicate_honest_approved_and_confirmed(self):
         self.guard.create_mandate(
             target_item="Samsung 980 Pro 1TB NVMe SSD",
             max_budget_cents=10000,
             required_specs="1TB NVMe M.2 SSD PCIe 4.0",
             brand_rule="PREFERRED",
-            condition_rule="NEW_ONLY"
+            condition_rule="NEW_ONLY",
+            authorized_agent=self.agent
         )
         mock_gl.message.sender_address = Address(self.agent)
         self.guard.propose_substitution(
@@ -265,7 +352,8 @@ class TestPurchaseGuard(unittest.TestCase):
             max_budget_cents=10000,
             required_specs="1TB NVMe M.2 SSD PCIe 4.0",
             brand_rule="ANY",
-            condition_rule="NEW_ONLY"
+            condition_rule="NEW_ONLY",
+            authorized_agent=self.agent
         )
         mock_gl.message.sender_address = Address(self.agent)
         # Malicious or buggy agent proposes a cheap SATA refurbished drive claiming it meets specs
@@ -289,7 +377,8 @@ class TestPurchaseGuard(unittest.TestCase):
             max_budget_cents=10000,  # $100 max
             required_specs="1TB NVMe M.2 SSD PCIe 4.0",
             brand_rule="ANY",
-            condition_rule="NEW_ONLY"
+            condition_rule="NEW_ONLY",
+            authorized_agent=self.agent
         )
         mock_gl.message.sender_address = Address(self.agent)
         # Agent claims price is 9500 ($95), but actual vendor page has surged price to 14999 ($149.99)
@@ -313,7 +402,8 @@ class TestPurchaseGuard(unittest.TestCase):
             max_budget_cents=10000,
             required_specs="1TB NVMe",
             brand_rule="ANY",
-            condition_rule="NEW_ONLY"
+            condition_rule="NEW_ONLY",
+            authorized_agent=self.agent
         )
         mock_gl.message.sender_address = Address(self.agent)
         self.guard.propose_substitution(
@@ -345,7 +435,8 @@ class TestPurchaseGuard(unittest.TestCase):
             max_budget_cents=10000,
             required_specs="1TB NVMe",
             brand_rule="PREFERRED",
-            condition_rule="NEW_ONLY"
+            condition_rule="NEW_ONLY",
+            authorized_agent=self.agent
         )
         mock_gl.message.sender_address = Address(self.agent)
         self.guard.propose_substitution(1, "Off-Brand SSD", self.url_honest, 8000, "Notes")
