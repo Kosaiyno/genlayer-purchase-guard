@@ -3,15 +3,18 @@ Unit tests for PurchaseGuard Intelligent Contract.
 Mocks the GenLayer runtime environment (gl, TreeMap, u256, Address, gl.vm, gl.nondet)
 to verify:
 - Dual-role Leader/Validator Equivalence Principle consensus (gl.vm.run_nondet_unsafe)
+- Cryptographic evidence consistency: SHA-256 hash match between leader and validator
+- Price consensus: Leader and validator must agree on vendor_price_cents
 - Mandate authorization controls & anti-takeover invariants
 - Independent vendor evidence acquisition & raw-text verbatim quote validation
-- Deterministic clamps for stock availability, non-downgraded condition, and budget ceilings
+- Deterministic clamps for stock availability, non-downgrade condition (rejecting USED), budget ceilings, and price match
 - Clearing of stale adjudications and audit trail updates on buyer override
 """
 
 import sys
 import os
 import json
+import hashlib
 import unittest
 
 # --- Mock GenLayer Runtime for Local Unit Testing ---
@@ -59,7 +62,6 @@ class MockNondetWeb:
     def get(self, url: str):
         if url in self.responses:
             return MockWebResponse(self.responses[url])
-        # Default mock response
         return MockWebResponse(json.dumps({
             "title": "Default Item",
             "price_cents": 8999,
@@ -86,6 +88,15 @@ class MockNondet:
                 "verbatim_quote": "\"condition\": \"REFURBISHED\"",
                 "rationale": "Product is refurbished and downgraded to SATA speeds, violating NEW_ONLY and NVMe specs."
             })
+        elif "Used Drive" in prompt:
+            return json.dumps({
+                "decision": "REJECTED",
+                "vendor_price_cents": 4000,
+                "stock_status": "IN_STOCK",
+                "condition": "USED",
+                "verbatim_quote": "\"condition\": \"USED\"",
+                "rationale": "Product is second-hand used condition."
+            })
         elif "14999" in prompt or "Surged SSD" in prompt:
             return json.dumps({
                 "decision": "REJECTED",
@@ -101,7 +112,7 @@ class MockNondet:
                 "vendor_price_cents": 8000,
                 "stock_status": "IN_STOCK",
                 "condition": "NEW",
-                "verbatim_quote": "\"price_cents\": 8999",
+                "verbatim_quote": "\"price_cents\": 8000",
                 "rationale": "Soft brand preference deviation."
             })
         elif "Crucial P5 Plus" in prompt:
@@ -209,6 +220,8 @@ class TestPurchaseGuard(unittest.TestCase):
         self.url_honest = "https://raw.githubusercontent.com/kosaiyno/genlayer-purchase-guard/main/evidence/honest_crucial_ssd.json"
         self.url_downgraded = "https://raw.githubusercontent.com/kosaiyno/genlayer-purchase-guard/main/evidence/downgraded_sata_ssd.json"
         self.url_surge = "https://raw.githubusercontent.com/kosaiyno/genlayer-purchase-guard/main/evidence/price_surged_ssd.json"
+        self.url_offbrand = "https://raw.githubusercontent.com/kosaiyno/genlayer-purchase-guard/main/evidence/offbrand_ssd.json"
+        self.url_used = "https://raw.githubusercontent.com/kosaiyno/genlayer-purchase-guard/main/evidence/used_ssd.json"
 
         mock_gl.nondet.web.responses[self.url_honest] = json.dumps({
             "product_title": "Crucial P5 Plus 1TB PCIe 4.0 3D NAND NVMe M.2 Gaming SSD",
@@ -229,6 +242,20 @@ class TestPurchaseGuard(unittest.TestCase):
             "price_cents": 14999,
             "stock_status": "IN_STOCK",
             "condition": "NEW",
+            "specifications": {"capacity": "1TB"}
+        })
+        mock_gl.nondet.web.responses[self.url_offbrand] = json.dumps({
+            "product_title": "Off-Brand High Speed NVMe SSD",
+            "price_cents": 8000,
+            "stock_status": "IN_STOCK",
+            "condition": "NEW",
+            "specifications": {"capacity": "1TB"}
+        })
+        mock_gl.nondet.web.responses[self.url_used] = json.dumps({
+            "product_title": "Used Drive 1TB NVMe SSD",
+            "price_cents": 4000,
+            "stock_status": "IN_STOCK",
+            "condition": "USED",
             "specifications": {"capacity": "1TB"}
         })
 
@@ -363,7 +390,7 @@ class TestPurchaseGuard(unittest.TestCase):
         """Case 9: Unrelated account cannot submit a decision override."""
         mock_gl.message.sender_address = Address(self.buyer)
         m = self.guard.create_mandate("SSD", 10000, "1TB", "PREFERRED", "NEW_ONLY", authorized_agent=self.agent)
-        self.guard.propose_substitution(m, "Off-Brand", self.url_honest, 8000, "Notes")
+        self.guard.propose_substitution(m, "Off-Brand", self.url_offbrand, 8000, "Notes")
 
         self.guard.adjudicate_substitution(m)
         self.assertEqual(self.guard.get_mandate_status(m), "NEEDS_USER_APPROVAL")
@@ -386,7 +413,7 @@ class TestPurchaseGuard(unittest.TestCase):
             self.guard.set_authorized_agent(m, "0x123nothex")
 
     # =========================================================================
-    # CHATGPT REVIEW HARDENING TESTS: VERIFICATION, CLAMPS, STALENESS & OVERRIDE
+    # CHATGPT REVIEW HARDENING TESTS: VERIFICATION, CLAMPS, STALENESS & CONSENSUS
     # =========================================================================
 
     def test_hallucinated_quote_not_in_evidence_is_clamped_to_rejected(self):
@@ -410,7 +437,7 @@ class TestPurchaseGuard(unittest.TestCase):
         self.assertIn("verbatim-grounded vendor judgment", str(ctx.exception))
 
     def test_unknown_or_missing_stock_or_condition_cannot_pass(self):
-        """Critical Fix 2: Unknown stock status or condition clamps to REJECTED."""
+        """Critical Fix 2: Out of stock status clamps to REJECTED."""
         mock_gl.message.sender_address = Address(self.buyer)
         m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
         self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Notes")
@@ -429,6 +456,29 @@ class TestPurchaseGuard(unittest.TestCase):
         parsed = json.loads(res)
         self.assertEqual(parsed["decision"], "REJECTED")
         self.assertIn("not in stock", parsed["rationale"])
+
+    def test_used_goods_rejected_under_refurbished_ok(self):
+        """Condition Policy Fix: USED goods are rejected even under REFURBISHED_OK policy."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "REFURBISHED_OK")
+        self.guard.propose_substitution(m, "Used Drive", self.url_used, 4000, "Used offer")
+
+        res = self.guard.adjudicate_substitution(m)
+        parsed = json.loads(res)
+        self.assertEqual(parsed["decision"], "REJECTED")
+        self.assertIn("USED goods are strictly prohibited", parsed["rationale"])
+
+    def test_material_price_discrepancy_clamped_to_rejected(self):
+        """Price Consistency Fix: Material discrepancy between claimed price and verified vendor price is clamped."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
+        # Agent claims price is 5000 cents ($50), but actual vendor page shows 8999 cents ($89.99)
+        self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 5000, "Claiming low price")
+
+        res = self.guard.adjudicate_substitution(m)
+        parsed = json.loads(res)
+        self.assertEqual(parsed["decision"], "REJECTED")
+        self.assertIn("Claimed price (5000 cents) does not match verified vendor price (8999 cents)", parsed["rationale"])
 
     def test_weak_vendor_url_validation_rejected(self):
         """Important Fix 4: Non-HTTPS or oversized vendor URLs are rejected."""
@@ -466,7 +516,7 @@ class TestPurchaseGuard(unittest.TestCase):
         """Minor Fix 5B: Buyer override updates both mandate status and stored adjudication record."""
         mock_gl.message.sender_address = Address(self.buyer)
         m = self.guard.create_mandate("SSD", 10000, "1TB", "PREFERRED", "NEW_ONLY")
-        self.guard.propose_substitution(m, "Off-Brand", self.url_honest, 8000, "Notes")
+        self.guard.propose_substitution(m, "Off-Brand", self.url_offbrand, 8000, "Notes")
         self.guard.adjudicate_substitution(m)
         self.assertEqual(self.guard.get_mandate_status(m), "NEEDS_USER_APPROVAL")
 
@@ -480,26 +530,54 @@ class TestPurchaseGuard(unittest.TestCase):
         self.assertEqual(adj_data["overridden_by"], self.buyer)
         self.assertIn("Manual override by buyer", adj_data["override_rationale"])
 
-    def test_validator_rejects_malicious_leader(self):
-        """Important Fix 3: Validator independently evaluates and rejects a malicious leader."""
+    def test_validator_rejects_evidence_hash_mismatch(self):
+        """Important Fix 3A: Validator rejects leader if evidence hash does not match."""
         mock_gl.message.sender_address = Address(self.buyer)
         m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
         self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Notes")
 
-        # Malicious leader attempts to force an ungrounded REJECTED verdict
+        # Leader provides a forged evidence hash
         mock_gl.vm.tamper_leader = True
         mock_gl.vm.tampered_payload = {
             "status": "OK",
-            "decision": "REJECTED",
+            "evidence_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "decision": "APPROVED",
             "vendor_price_cents": 8999,
             "stock_status": "IN_STOCK",
             "condition": "NEW",
             "verbatim_quote": "\"price_cents\": 8999",
-            "rationale": "Malicious leader veto",
+            "rationale": "Tampered evidence hash",
             "fetched_text": "..."
         }
 
-        # Validator re-derives consensus independently; discrepancy causes consensus failure
+        with self.assertRaises(Exception) as ctx:
+            self.guard.adjudicate_substitution(m)
+        self.assertIn("validator rejected leader output", str(ctx.exception))
+
+    def test_validator_rejects_price_discrepancy(self):
+        """Important Fix 3B: Validator rejects leader if independently evaluated price disagrees."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
+        self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Notes")
+
+        # Compute actual hash of url_honest
+        raw_text = mock_gl.nondet.web.responses[self.url_honest]
+        real_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest().lower()
+
+        # Leader falsely claims vendor price is 7000 cents
+        mock_gl.vm.tamper_leader = True
+        mock_gl.vm.tampered_payload = {
+            "status": "OK",
+            "evidence_hash": real_hash,
+            "decision": "APPROVED",
+            "vendor_price_cents": 7000,  # Disagrees with validator's 8999
+            "stock_status": "IN_STOCK",
+            "condition": "NEW",
+            "verbatim_quote": "\"price_cents\": 8999",
+            "rationale": "Falsified price",
+            "fetched_text": raw_text
+        }
+
         with self.assertRaises(Exception) as ctx:
             self.guard.adjudicate_substitution(m)
         self.assertIn("validator rejected leader output", str(ctx.exception))

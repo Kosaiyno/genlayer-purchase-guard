@@ -1,6 +1,7 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 from genlayer import *
 import json
+import hashlib
 
 # =============================================================================
 # CONSTANTS & CANONICAL ENUMS
@@ -36,15 +37,15 @@ def _quote_in_vendor_text(quote: str, text: str) -> bool:
 
 
 def _fetch_vendor_payload(url: str) -> dict:
-    """Independently fetches vendor evidence via public web get and classifies payload."""
+    """Independently fetches vendor evidence via public web get, computes SHA-256 evidence hash, and classifies payload."""
     try:
         resp = gl.nondet.web.get(url)
     except Exception as e:
-        return {"status": "FETCH_ERROR", "text": "", "detail": str(e)[:160]}
+        return {"status": "FETCH_ERROR", "text": "", "evidence_hash": "", "detail": str(e)[:160]}
 
     status_code = getattr(resp, "status", None)
     if isinstance(status_code, int) and status_code >= 400:
-        return {"status": "FETCH_ERROR", "text": "", "detail": f"HTTP {status_code}"}
+        return {"status": "FETCH_ERROR", "text": "", "evidence_hash": "", "detail": f"HTTP {status_code}"}
 
     body = getattr(resp, "body", resp)
     if body is None:
@@ -56,19 +57,21 @@ def _fetch_vendor_payload(url: str) -> dict:
     else:
         raw = str(body).encode("utf-8")
 
+    evidence_hash = hashlib.sha256(raw).hexdigest().lower()
+
     if len(raw) == 0:
-        return {"status": "EMPTY", "text": "", "detail": "0 bytes"}
+        return {"status": "EMPTY", "text": "", "evidence_hash": evidence_hash, "detail": "0 bytes"}
 
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return {"status": "ENCODING_ERROR", "text": "", "detail": "invalid utf-8"}
+        return {"status": "ENCODING_ERROR", "text": "", "evidence_hash": evidence_hash, "detail": "invalid utf-8"}
 
     clean_text = text[:4000].strip()
     if len(clean_text) == 0:
-        return {"status": "EMPTY", "text": "", "detail": "whitespace only"}
+        return {"status": "EMPTY", "text": "", "evidence_hash": evidence_hash, "detail": "whitespace only"}
 
-    return {"status": "OK", "text": clean_text, "detail": ""}
+    return {"status": "OK", "text": clean_text, "evidence_hash": evidence_hash, "detail": ""}
 
 
 def _parse_vendor_judgment(raw) -> dict:
@@ -131,7 +134,7 @@ def _build_vendor_prompt(target_item: str, max_budget: int, specs: str, brand: s
         f"{text}\n\n"
         "EVALUATION DIRECTIVES:\n"
         "1. Extract the actual vendor price in cents (vendor_price_cents > 0), stock status (IN_STOCK or OUT_OF_STOCK), and condition (NEW, REFURBISHED, or USED). Never return UNKNOWN.\n"
-        "2. verbatim_quote must be an exact substring (6 to 120 chars) from the vendor evidence proving price, condition, or availability.\n"
+        "2. verbatim_quote must be an exact contiguous substring (6 to 120 chars) from the vendor evidence that directly proves the reported price, condition, or stock status (e.g. contains the price figure, 'condition', 'new', 'refurbished', or stock indicator). Irrelevant text, headers, or generic greetings are strictly forbidden.\n"
         "3. If actual vendor price > max budget, or item is OUT_OF_STOCK, or condition violates rule (e.g. REFURBISHED on NEW_ONLY), or specs are downgraded: decision must be REJECTED.\n"
         "4. If product meets/exceeds specifications and condition within budget: decision is APPROVED.\n"
         "5. If functional equivalent but deviates from preferred brand: decision is NEEDS_USER_APPROVAL.\n\n"
@@ -426,6 +429,7 @@ class PurchaseGuard(gl.Contract):
             if ev["status"] != "OK":
                 return {
                     "status": ev["status"],
+                    "evidence_hash": ev["evidence_hash"],
                     "decision": "REJECTED",
                     "vendor_price_cents": 0,
                     "stock_status": "OUT_OF_STOCK",
@@ -441,6 +445,7 @@ class PurchaseGuard(gl.Contract):
                 judgment = _judge_vendor(prompt)
                 if judgment is not None and _quote_in_vendor_text(judgment["verbatim_quote"], ev["text"]):
                     judgment["status"] = "OK"
+                    judgment["evidence_hash"] = ev["evidence_hash"]
                     judgment["fetched_text"] = ev["text"]
                     return judgment
             raise Exception("Leader could not produce a valid, verbatim-grounded vendor judgment")
@@ -452,12 +457,16 @@ class PurchaseGuard(gl.Contract):
             if not isinstance(leader, dict):
                 return False
 
-            # 1. Independent fetch + deterministic status match
+            # 1. Independent fetch + deterministic status and cryptographic evidence hash match
             ev = _fetch_vendor_payload(target_vendor_url)
             if str(leader.get("status", "")) != ev["status"]:
                 return False
             if ev["status"] != "OK":
                 return True  # fetch failure independently verified
+
+            # Cryptographic evidence consistency: Leader and validator must evaluate identical raw bytes
+            if str(leader.get("evidence_hash", "")) != ev["evidence_hash"]:
+                return False
 
             # 2. Structural & verbatim quote verification against validator's OWN copy of vendor evidence
             leader_j = _parse_vendor_judgment(leader)
@@ -466,7 +475,7 @@ class PurchaseGuard(gl.Contract):
             if not _quote_in_vendor_text(leader_j["verbatim_quote"], ev["text"]):
                 return False
 
-            # 3. Independent LLM judgment re-derivation: decision-bearing fields must match
+            # 3. Independent LLM judgment re-derivation: decision-bearing fields AND price must match
             prompt = _build_vendor_prompt(target_item, max_budget, required_specs, brand_rule,
                                           condition_rule, substitute_name, claimed_price, target_vendor_url, ev["text"])
             for _ in range(2):
@@ -475,7 +484,8 @@ class PurchaseGuard(gl.Contract):
                     return (
                         mine["decision"] == leader_j["decision"] and
                         mine["stock_status"] == leader_j["stock_status"] and
-                        mine["condition"] == leader_j["condition"]
+                        mine["condition"] == leader_j["condition"] and
+                        mine["vendor_price_cents"] == leader_j["vendor_price_cents"]
                     )
             return False
 
@@ -525,21 +535,30 @@ class PurchaseGuard(gl.Contract):
                     decision = "REJECTED"
                     rationale = f"Deterministic clamp: Vendor item is not in stock ({stock_status})."
 
-                # Clamp 3: Condition Verification & Non-downgrade Invariant
+                # Clamp 3: Condition Verification & Non-downgrade Invariants
                 if condition_found not in ["NEW", "REFURBISHED", "USED"]:
                     decision = "REJECTED"
                     rationale = f"Deterministic clamp: Unknown product condition '{condition_found}'."
+                elif condition_found == "USED":
+                    decision = "REJECTED"
+                    rationale = "Deterministic clamp: USED goods are strictly prohibited under all mandate policies."
                 elif condition_rule == "NEW_ONLY" and condition_found != "NEW":
                     decision = "REJECTED"
                     rationale = f"Deterministic clamp: Mandate requires NEW_ONLY but vendor condition is {condition_found}."
+                elif condition_rule == "REFURBISHED_OK" and condition_found not in ["NEW", "REFURBISHED"]:
+                    decision = "REJECTED"
+                    rationale = f"Deterministic clamp: Mandate permits NEW or REFURBISHED, but vendor condition is {condition_found}."
 
-                # Clamp 4: Price & Budget Ceilings
+                # Clamp 4: Price Ceiling & Anti-surge Discrepancy Clamp
                 if vendor_price <= 0:
                     decision = "REJECTED"
                     rationale = "Deterministic clamp: Vendor price must be a valid positive amount."
                 elif vendor_price > max_budget or claimed_price > max_budget:
                     decision = "REJECTED"
                     rationale = f"Deterministic clamp: Price ({max(vendor_price, claimed_price)} cents) exceeds max budget ({max_budget} cents)."
+                elif vendor_price != claimed_price:
+                    decision = "REJECTED"
+                    rationale = f"Deterministic clamp: Claimed price ({claimed_price} cents) does not match verified vendor price ({vendor_price} cents)."
 
         canonical_record = {
             "mandate_id": int(mandate_id),
