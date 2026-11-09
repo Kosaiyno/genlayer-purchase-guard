@@ -61,30 +61,36 @@ Full transaction parameters and read-back states are documented in [`deploy/proo
 
 ---
 
-## 3. Five Deterministic Safety Clamps & Authorization Controls
+## 3. Deterministic Safety Clamps & Consensus Architecture
 
 1. **Mandate Authorization Control (Anti-Takeover)**: `propose_substitution` and `confirm_purchase` are strictly restricted to the original buyer or an explicitly authorized agent (`authorized_agent`). Unrelated third-party callers cannot take over mandates or confirm execution.
-2. **Independent Evidence Acquisition**: Contract fetches evidence directly using `gl.nondet.web.get()`. Never relies on caller-supplied specification parameters.
-3. **Mandatory Verbatim Quoting**: AI validators must extract an exact substring from the fetched payload. If missing, contract clamps to `REJECTED`.
-4. **Hard Budget Ceiling**: If vendor price exceeds `max_budget_cents`, contract forcefully clamps to `REJECTED`.
-5. **Condition & Stock Invariants**: If the vendor payload shows `REFURBISHED` on a `NEW_ONLY` mandate or `OUT_OF_STOCK`, contract forcefully clamps to `REJECTED`.
+2. **Cryptographic Evidence Consistency**: Both leader and validator compute a SHA-256 hash over the raw fetched vendor payload. Validators reject the leader if evidence hashes do not match, guaranteeing evaluation of identical bytes.
+3. **Leader/Validator Consensus (`gl.vm.run_nondet_unsafe`)**: Validators independently web-fetch vendor evidence, verify quotes against their own local text, and run an independent LLM evaluation requiring consensus on `decision`, `stock_status`, `condition`, and `vendor_price_cents`.
+4. **Verbatim Quote Grounding**: Quote verification deterministically proves verbatim existence in the raw vendor payload (`quote in text`); semantic fact interpretation is cross-evaluated by independent validator consensus.
+5. **Strict Condition Invariants (Anti-Downgrade)**: `USED` goods are strictly rejected under all mandate policies (`NEW_ONLY` accepts only `NEW`; `REFURBISHED_OK` accepts only `NEW` or `REFURBISHED`).
+6. **Anti-Surge & Price Match Clamp**: Hard budget ceiling enforcement (`max_budget_cents`) plus deterministic rejection of any material discrepancy between the agent's claimed price and verified vendor price (`vendor_price == claimed_price`).
 
 ---
 
-## 4. Local Testing & Verification (13/13 Passing)
+## 4. Local Testing & Verification (21/21 Passing)
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-Includes dedicated tests verifying that unauthorized callers are rejected:
-- `test_unauthorized_proposer_rejected`: Unauthorized caller attempting `propose_substitution` is rejected with `PermissionError`.
-- `test_unauthorized_confirm_purchase_rejected`: Unauthorized caller attempting `confirm_purchase` is rejected with `PermissionError`.
-- `test_set_authorized_agent_access_control`: Only the buyer can set or update the delegated agent.
-- `test_buyer_and_authorized_agent_both_can_propose_and_confirm`: Validates authorized flow for both buyer and delegated agent.
+Includes dedicated tests verifying that unauthorized callers are rejected and leave storage completely unchanged:
+- `test_case_1_unrelated_account_submits_proposal_rejected`: Rejection with storage immutability check.
+- `test_case_4_unrelated_account_confirms_purchase_rejected`: Rejection with state immutability check (status remains `APPROVED`, never `EXECUTED`).
+- `test_case_7_unrelated_account_changes_authorized_agent_rejected`: Rejection with delegation immutability check.
+- `test_case_8_former_agent_acts_after_revocation_rejected`: Revoked agent cannot propose or confirm.
+- `test_case_9_unrelated_account_overrides_buyer_decision_rejected`: Unrelated caller cannot override decisions.
+- `test_validator_rejects_evidence_hash_mismatch`: Consensus failure on tampered evidence hash.
+- `test_validator_rejects_price_discrepancy`: Consensus failure on price disagreement.
+- `test_used_goods_rejected_under_refurbished_ok`: Rejection of second-hand goods under refurbished policy.
+- `test_material_price_discrepancy_clamped_to_rejected`: Rejection of claimed vs vendor price mismatch.
 
 ```
-Ran 13 tests in 0.001s
+Ran 21 tests in 0.002s
 
 OK
 ```
