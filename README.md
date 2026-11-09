@@ -41,21 +41,16 @@ sequenceDiagram
 
 ## 2. Live On-Chain Deployments & Verified StudioNet Manifest
 
-All transactions below were executed and reached finality on StudioNet:
+All transactions below were executed and reached finality on StudioNet on the updated contract (`0xcAE465B951A1509a8f06D35B2353951abCDFe981`):
 
 | Step | Method | Tx Hash | Result & Consensus State |
 | :---: | :--- | :--- | :--- |
-| **1** | `deploy` | [`0xcf3f4b3dcf...`](https://explorer-studio.genlayer.com/tx/0xcf3f4b3dcf0d9e4f1fb394a4d9c1de53f91a1a2c34ae7fd18e3f8482e73f103c) | **FINALIZED** (Contract deployed at `0x2A83...410a`) |
-| **2** | `create_mandate` (Mandate 1) | [`0xfcdc48c5d7...`](https://explorer-studio.genlayer.com/tx/0xfcdc48c5d70a0433c68383e85bedcc4d3fc340305f17cb329a8173dd0d288c3b) | **FINALIZED** (Target: 1TB NVMe, read >= 7000MB/s) |
-| **3** | `propose_substitution` (Mandate 1) | [`0xd4d9041af2...`](https://explorer-studio.genlayer.com/tx/0xd4d9041af2a8895b3418c9b552d17deed96e75eeb445bc7254721296dbd0b122) | **FINALIZED** (Crucial P5 Plus proposed) |
-| **4** | `adjudicate_substitution` (Mandate 1) | [`0x2fdcfd4269...`](https://explorer-studio.genlayer.com/tx/0x2fdcfd4269a469fd62e59abb905b0b97ef33291789256174f8a9da6eb635799a) | **FINALIZED**: `REJECTED`<br>Caught read speed 6600MB/s < 7000MB/s floor<br>Quote: `"sequential_read_speed": "6600 MB/s"` |
-| **5** | `create_mandate` (Mandate 2) | [`0xa5568b6da9...`](https://explorer-studio.genlayer.com/tx/0xa5568b6da9656c2041576f1a540262c64bd4ae05cc534475e3c3275cabc9a3bc) | **FINALIZED** (Target: 1TB NVMe, NEW_ONLY) |
-| **6** | `propose_substitution` (Mandate 2) | [`0xfcb26f1652...`](https://explorer-studio.genlayer.com/tx/0xfcb26f1652dd5595f1a78ae2079518ea8a6685b5feee2b55ac55510f0e0599e4) | **FINALIZED** (Adversarial proposal: Refurbished SATA) |
-| **7** | `adjudicate_substitution` (Mandate 2) | [`0xb44029811b...`](https://explorer-studio.genlayer.com/tx/0xb44029811bf94cf428ee7866488097d63c9d1884897bf03c649dafe5e4bf0cd9) | **FINALIZED**: `REJECTED`<br>**Abuse Intercepted**: Caught REFURBISHED condition & SATA downgrade<br>Quote: `"condition": "REFURBISHED"` |
-| **8** | `create_mandate` (Mandate 3) | [`0xa20d92cf86...`](https://explorer-studio.genlayer.com/tx/0xa20d92cf8627e33012e567bb1bfac04ae0c55d67f161f6d5096b3532fc137221) | **FINALIZED** (Target: 1TB NVMe, read >= 6500MB/s, ANY brand) |
-| **9** | `propose_substitution` (Mandate 3) | [`0x110652f02d...`](https://explorer-studio.genlayer.com/tx/0x110652f02d33cfcb064206902085b83ad526915054e14c59b9b0b8900783276d) | **FINALIZED** (Crucial P5 Plus proposed) |
-| **10** | `adjudicate_substitution` (Mandate 3) | [`0x80cee7727d...`](https://explorer-studio.genlayer.com/tx/0x80cee7727db2bdeb7153fbbca75ee93688d61960d5fca8c4b9318ae101d18805) | **FINALIZED**: `APPROVED`<br>Independent fetch verified 6600MB/s >= 6500MB/s, $89.99 < $100 budget |
-| **11** | `confirm_purchase` (Mandate 3) | [`0x1f5a84f3fa...`](https://explorer-studio.genlayer.com/tx/0x1f5a84f3fa1529153b749d14e3c02f589ee5d12afecb53d156a440de158b6422) | **ACCEPTED**: State transitioned to `EXECUTED` |
+| **1** | `deploy` | [`0x196964f5d5...`](https://explorer-studio.genlayer.com/tx/0x196964f5d5802e4e494b8e14fc8ff32c368f6def770e1c3a430c91375814782e) | **FINALIZED** (Contract deployed at [`0xcAE465B951A1509a8f06D35B2353951abCDFe981`](https://explorer-studio.genlayer.com/address/0xcAE465B951A1509a8f06D35B2353951abCDFe981)) |
+| **2** | `create_mandate` (Mandate 1) | [`0xbfd1177af7...`](https://explorer-studio.genlayer.com/tx/0xbfd1177af7a07e1e4642190ac900328e1bf560b7a14f8877e7fa0fc9cf0a738d) | **FINALIZED** (Mandate 1 created by buyer: 1TB NVMe, read >= 7000MB/s, budget $100.00) |
+| **3** | `propose_substitution` (Mandate 1) | [`0xec06923480...`](https://explorer-studio.genlayer.com/tx/0xec069234808cf58502ffe458a22daba1bd1ddba3d05b586a09f491b0d847edab) | **FINALIZED** (Buyer proposes Crucial P5 Plus; authorized caller verified) |
+| **4** | `adjudicate_substitution` (Mandate 1) | [`0x3853bac071...`](https://explorer-studio.genlayer.com/tx/0x3853bac071796924fb3290ba7142158597996470807118c4895c31f05e4d2e9a) | **FINALIZED**: `NEEDS_USER_APPROVAL`<br>Evidence SHA-256 matched, verified price 8999 cents, flagged brand deviation |
+| **5** | `buyer_override` (Mandate 1) | [`0xd7075c804f...`](https://explorer-studio.genlayer.com/tx/0xd7075c804f3cbd4b7976d68eae80db925b9d7fb552da592bf2df6ba32d17ffeb) | **FINALIZED**: `APPROVED`<br>Original buyer explicitly approved substitution; audit trail recorded |
+| **6** | `confirm_purchase` (Mandate 1) | [`0xd918c993ab...`](https://explorer-studio.genlayer.com/tx/0xd918c993ab843345c3109be8456a5fd61c46d72b82e7a43a23d4fb27a36bd534) | **FINALIZED**: `EXECUTED`<br>Authorized confirmation executed on-chain |
 
 Full transaction parameters and read-back states are documented in [`deploy/proof.json`](file:///C:/Users/user/Desktop/genlayer-purchase-guard/deploy/proof.json).
 
