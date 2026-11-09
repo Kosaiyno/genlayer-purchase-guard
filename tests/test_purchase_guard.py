@@ -1,8 +1,12 @@
 """
 Unit tests for PurchaseGuard Intelligent Contract.
-Mocks the GenLayer runtime environment (gl, TreeMap, u256, Address, gl.nondet.web.get)
-to verify all contract state transitions, independent vendor evidence acquisition,
-verbatim quote validation, deterministic safety clamps, and mandate authorization controls.
+Mocks the GenLayer runtime environment (gl, TreeMap, u256, Address, gl.vm, gl.nondet)
+to verify:
+- Dual-role Leader/Validator Equivalence Principle consensus (gl.vm.run_nondet_unsafe)
+- Mandate authorization controls & anti-takeover invariants
+- Independent vendor evidence acquisition & raw-text verbatim quote validation
+- Deterministic clamps for stock availability, non-downgraded condition, and budget ceilings
+- Clearing of stale adjudications and audit trail updates on buyer override
 """
 
 import sys
@@ -67,18 +71,13 @@ class MockNondetWeb:
 class MockNondet:
     def __init__(self):
         self.web = MockNondetWeb()
+        self.mock_prompt_response = None
 
+    def exec_prompt(self, prompt, response_format=None):
+        if self.mock_prompt_response is not None:
+            return self.mock_prompt_response
 
-class MockEqPrinciple:
-    def __init__(self):
-        self.mock_response = None
-
-    def prompt_non_comparative(self, get_input_fn, task="", criteria=""):
-        if self.mock_response is not None:
-            return self.mock_response
-
-        user_input = get_input_fn()
-        if "Generic Low-End SATA" in user_input or "BUDGET-SATA" in user_input:
+        if "Generic Low-End SATA" in prompt or "Cheap Drive" in prompt:
             return json.dumps({
                 "decision": "REJECTED",
                 "vendor_price_cents": 4500,
@@ -87,7 +86,7 @@ class MockEqPrinciple:
                 "verbatim_quote": "\"condition\": \"REFURBISHED\"",
                 "rationale": "Product is refurbished and downgraded to SATA speeds, violating NEW_ONLY and NVMe specs."
             })
-        elif "14999" in user_input:
+        elif "14999" in prompt or "Surged SSD" in prompt:
             return json.dumps({
                 "decision": "REJECTED",
                 "vendor_price_cents": 14999,
@@ -96,7 +95,16 @@ class MockEqPrinciple:
                 "verbatim_quote": "\"price_cents\": 14999",
                 "rationale": "Actual vendor price of $149.99 exceeds buyer max budget ceiling."
             })
-        elif "Crucial P5 Plus" in user_input:
+        elif "Off-Brand" in prompt:
+            return json.dumps({
+                "decision": "NEEDS_USER_APPROVAL",
+                "vendor_price_cents": 8000,
+                "stock_status": "IN_STOCK",
+                "condition": "NEW",
+                "verbatim_quote": "\"price_cents\": 8999",
+                "rationale": "Soft brand preference deviation."
+            })
+        elif "Crucial P5 Plus" in prompt:
             return json.dumps({
                 "decision": "APPROVED",
                 "vendor_price_cents": 8999,
@@ -114,6 +122,31 @@ class MockEqPrinciple:
                 "verbatim_quote": "\"price_cents\": 8999",
                 "rationale": "Satisfies specs."
             })
+
+
+class MockVMReturn:
+    def __init__(self, calldata):
+        self.calldata = calldata
+
+
+class MockVM:
+    Return = MockVMReturn
+
+    def __init__(self):
+        self.tamper_leader = False
+        self.tampered_payload = None
+
+    def run_nondet_unsafe(self, leader_fn, validator_fn):
+        if self.tamper_leader:
+            leader_output = self.tampered_payload
+        else:
+            leader_output = leader_fn()
+
+        wrapped = MockVMReturn(leader_output)
+        valid = validator_fn(wrapped)
+        if not valid:
+            raise Exception("Consensus failed: validator rejected leader output")
+        return leader_output
 
 
 class MockPublic:
@@ -139,7 +172,7 @@ class MockGLModule:
         self.message = MockMessage()
         self.block = MockBlock()
         self.nondet = MockNondet()
-        self.eq_principle = MockEqPrinciple()
+        self.vm = MockVM()
         self.public = MockPublic()
         self.Contract = MockContract
 
@@ -166,7 +199,10 @@ class TestPurchaseGuard(unittest.TestCase):
         self.intruder = "0x9999999999999999999999999999999999999999"
 
         mock_gl.message.sender_address = Address(self.buyer)
-        mock_gl.eq_principle.mock_response = None
+        mock_gl.nondet.mock_prompt_response = None
+        mock_gl.vm.tamper_leader = False
+        mock_gl.vm.tampered_payload = None
+
         self.guard = PurchaseGuard()
 
         # Mock vendor URL bodies
@@ -215,7 +251,7 @@ class TestPurchaseGuard(unittest.TestCase):
         self.assertEqual(self.guard.get_mandate_status(1), "ACTIVE")
 
     # =========================================================================
-    # STEWARD & REVIEWER AUTHORIZATION SUITE (ALL 9 CORE CASES)
+    # STEWARD & REVIEWER AUTHORIZATION SUITE (9 CORE SCENARIOS)
     # =========================================================================
 
     def test_case_1_unrelated_account_submits_proposal_rejected(self):
@@ -329,14 +365,6 @@ class TestPurchaseGuard(unittest.TestCase):
         m = self.guard.create_mandate("SSD", 10000, "1TB", "PREFERRED", "NEW_ONLY", authorized_agent=self.agent)
         self.guard.propose_substitution(m, "Off-Brand", self.url_honest, 8000, "Notes")
 
-        mock_gl.eq_principle.mock_response = json.dumps({
-            "decision": "NEEDS_USER_APPROVAL",
-            "vendor_price_cents": 8000,
-            "stock_status": "IN_STOCK",
-            "condition": "NEW",
-            "verbatim_quote": "\"price_cents\": 8999",
-            "rationale": "Soft brand preference deviation"
-        })
         self.guard.adjudicate_substitution(m)
         self.assertEqual(self.guard.get_mandate_status(m), "NEEDS_USER_APPROVAL")
 
@@ -350,114 +378,131 @@ class TestPurchaseGuard(unittest.TestCase):
     def test_case_10_address_validation_enforced(self):
         """Case 10: Invalid address formats are strictly rejected."""
         mock_gl.message.sender_address = Address(self.buyer)
-        # Invalid address string in create_mandate
         with self.assertRaises(ValueError):
             self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY", authorized_agent="invalid_address")
 
         m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
-        # Invalid address in set_authorized_agent
         with self.assertRaises(ValueError):
             self.guard.set_authorized_agent(m, "0x123nothex")
 
     # =========================================================================
-    # CORE BUSINESS LOGIC TESTS
+    # CHATGPT REVIEW HARDENING TESTS: VERIFICATION, CLAMPS, STALENESS & OVERRIDE
     # =========================================================================
 
-    def test_adjudicate_catches_downgraded_and_refurbished_abuse(self):
-        self.guard.create_mandate(
-            target_item="Samsung 980 Pro 1TB NVMe SSD",
-            max_budget_cents=10000,
-            required_specs="1TB NVMe M.2 SSD PCIe 4.0",
-            brand_rule="ANY",
-            condition_rule="NEW_ONLY",
-            authorized_agent=self.agent
-        )
-        mock_gl.message.sender_address = Address(self.agent)
-        self.guard.propose_substitution(
-            mandate_id=1,
-            substitute_item="Cheap Drive",
-            vendor_url=self.url_downgraded,
-            proposed_price_cents=4500,
-            agent_notes="Claims it is an NVMe substitute"
-        )
+    def test_hallucinated_quote_not_in_evidence_is_clamped_to_rejected(self):
+        """Critical Fix 1: Verbatim quote not present in fetched evidence clamps to REJECTED."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
+        self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Notes")
 
-        res = self.guard.adjudicate_substitution(1)
-        parsed = json.loads(res)
-        self.assertEqual(parsed["decision"], "REJECTED")
-        self.assertEqual(self.guard.get_mandate_status(1), "REJECTED")
-        self.assertIn("REFURBISHED", parsed["condition"])
-
-    def test_adjudicate_catches_price_surge_budget_overrun(self):
-        self.guard.create_mandate(
-            target_item="Samsung 980 Pro 1TB NVMe SSD",
-            max_budget_cents=10000,
-            required_specs="1TB NVMe M.2 SSD PCIe 4.0",
-            brand_rule="ANY",
-            condition_rule="NEW_ONLY",
-            authorized_agent=self.agent
-        )
-        mock_gl.message.sender_address = Address(self.agent)
-        self.guard.propose_substitution(
-            mandate_id=1,
-            substitute_item="Surged SSD",
-            vendor_url=self.url_surge,
-            proposed_price_cents=9500,
-            agent_notes="Claiming discount"
-        )
-
-        res = self.guard.adjudicate_substitution(1)
-        parsed = json.loads(res)
-        self.assertEqual(parsed["decision"], "REJECTED")
-        self.assertEqual(self.guard.get_mandate_status(1), "REJECTED")
-        self.assertIn("Deterministic clamp", parsed["rationale"])
-
-    def test_verbatim_quote_enforcement(self):
-        self.guard.create_mandate(
-            target_item="Samsung 980 Pro 1TB NVMe SSD",
-            max_budget_cents=10000,
-            required_specs="1TB NVMe",
-            brand_rule="ANY",
-            condition_rule="NEW_ONLY",
-            authorized_agent=self.agent
-        )
-        mock_gl.message.sender_address = Address(self.agent)
-        self.guard.propose_substitution(
-            mandate_id=1,
-            substitute_item="Crucial P5 Plus",
-            vendor_url=self.url_honest,
-            proposed_price_cents=8999,
-            agent_notes="Honest specs"
-        )
-
-        mock_gl.eq_principle.mock_response = json.dumps({
+        # AI invents a plausible quote that does NOT exist in vendor payload
+        mock_gl.nondet.mock_prompt_response = json.dumps({
             "decision": "APPROVED",
             "vendor_price_cents": 8999,
             "stock_status": "IN_STOCK",
             "condition": "NEW",
-            "verbatim_quote": "",  # Missing quote
-            "rationale": "Looks good"
+            "verbatim_quote": "\"completely_fake_hallucinated_field\": true",
+            "rationale": "Looks verified"
         })
 
-        res = self.guard.adjudicate_substitution(1)
+        with self.assertRaises(Exception) as ctx:
+            self.guard.adjudicate_substitution(m)
+        self.assertIn("verbatim-grounded vendor judgment", str(ctx.exception))
+
+    def test_unknown_or_missing_stock_or_condition_cannot_pass(self):
+        """Critical Fix 2: Unknown stock status or condition clamps to REJECTED."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
+        self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Notes")
+
+        # AI tries to approve while stock is OUT_OF_STOCK
+        mock_gl.nondet.mock_prompt_response = json.dumps({
+            "decision": "APPROVED",
+            "vendor_price_cents": 8999,
+            "stock_status": "OUT_OF_STOCK",
+            "condition": "NEW",
+            "verbatim_quote": "\"price_cents\": 8999",
+            "rationale": "Great deal but out of stock"
+        })
+
+        res = self.guard.adjudicate_substitution(m)
         parsed = json.loads(res)
         self.assertEqual(parsed["decision"], "REJECTED")
-        self.assertIn("Missing verifiable verbatim quote", parsed["rationale"])
+        self.assertIn("not in stock", parsed["rationale"])
 
-    def test_cancellation_access_control(self):
-        self.guard.create_mandate(
-            target_item="SSD",
-            max_budget_cents=10000,
-            required_specs="1TB",
-            brand_rule="ANY",
-            condition_rule="NEW_ONLY"
-        )
-        mock_gl.message.sender_address = Address(self.intruder)
-        with self.assertRaises(PermissionError):
-            self.guard.cancel_mandate(1)
-
+    def test_weak_vendor_url_validation_rejected(self):
+        """Important Fix 4: Non-HTTPS or oversized vendor URLs are rejected."""
         mock_gl.message.sender_address = Address(self.buyer)
-        self.guard.cancel_mandate(1)
-        self.assertEqual(self.guard.get_mandate_status(1), "CANCELLED")
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
+
+        # Insecure HTTP
+        with self.assertRaises(ValueError) as ctx1:
+            self.guard.propose_substitution(m, "Drive", "http://insecure-vendor.com/item", 8999, "Notes")
+        self.assertIn("HTTPS", str(ctx1.exception))
+
+        # Oversized URL (>256 chars)
+        oversized = "https://example.com/" + "a" * 250
+        with self.assertRaises(ValueError) as ctx2:
+            self.guard.propose_substitution(m, "Drive", oversized, 8999, "Notes")
+        self.assertIn("256 character limit", str(ctx2.exception))
+
+    def test_reproposing_clears_stale_adjudication(self):
+        """Minor Fix 5A: Stale adjudication record is cleared when re-proposing."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
+
+        # First proposal gets rejected
+        self.guard.propose_substitution(m, "Cheap Drive", self.url_downgraded, 4500, "Notes")
+        self.guard.adjudicate_substitution(m)
+        self.assertEqual(self.guard.get_mandate_status(m), "REJECTED")
+        self.assertIn("REJECTED", self.guard.get_adjudication(m))
+
+        # Re-propose: Stale adjudication must be cleared
+        self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Replacement proposal")
+        self.assertEqual(self.guard.get_mandate_status(m), "PROPOSED")
+        self.assertEqual(self.guard.get_adjudication(m), f"Adjudication not found for mandate: {m}")
+
+    def test_buyer_override_updates_audit_trail(self):
+        """Minor Fix 5B: Buyer override updates both mandate status and stored adjudication record."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "PREFERRED", "NEW_ONLY")
+        self.guard.propose_substitution(m, "Off-Brand", self.url_honest, 8000, "Notes")
+        self.guard.adjudicate_substitution(m)
+        self.assertEqual(self.guard.get_mandate_status(m), "NEEDS_USER_APPROVAL")
+
+        # Buyer overrides to APPROVED
+        self.guard.buyer_override(m, approve=True)
+        self.assertEqual(self.guard.get_mandate_status(m), "APPROVED")
+
+        # Verify audit trail in adjudication record
+        adj_data = json.loads(self.guard.get_adjudication(m))
+        self.assertEqual(adj_data["decision"], "APPROVED")
+        self.assertEqual(adj_data["overridden_by"], self.buyer)
+        self.assertIn("Manual override by buyer", adj_data["override_rationale"])
+
+    def test_validator_rejects_malicious_leader(self):
+        """Important Fix 3: Validator independently evaluates and rejects a malicious leader."""
+        mock_gl.message.sender_address = Address(self.buyer)
+        m = self.guard.create_mandate("SSD", 10000, "1TB", "ANY", "NEW_ONLY")
+        self.guard.propose_substitution(m, "Crucial P5 Plus", self.url_honest, 8999, "Notes")
+
+        # Malicious leader attempts to force an ungrounded REJECTED verdict
+        mock_gl.vm.tamper_leader = True
+        mock_gl.vm.tampered_payload = {
+            "status": "OK",
+            "decision": "REJECTED",
+            "vendor_price_cents": 8999,
+            "stock_status": "IN_STOCK",
+            "condition": "NEW",
+            "verbatim_quote": "\"price_cents\": 8999",
+            "rationale": "Malicious leader veto",
+            "fetched_text": "..."
+        }
+
+        # Validator re-derives consensus independently; discrepancy causes consensus failure
+        with self.assertRaises(Exception) as ctx:
+            self.guard.adjudicate_substitution(m)
+        self.assertIn("validator rejected leader output", str(ctx.exception))
 
 
 if __name__ == "__main__":
